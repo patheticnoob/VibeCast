@@ -104,7 +104,6 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                         listener = object : CastServer.Listener {
                             override fun onClientCountChanged(count: Int) {
                                 _uiState.update { it.copy(clientCount = count) }
-                                publishState()
                             }
 
                             override fun onCommand(message: String) {

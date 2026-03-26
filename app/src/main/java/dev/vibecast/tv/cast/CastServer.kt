@@ -56,7 +56,10 @@ class CastServer(
     fun broadcast(json: String) {
         clients.forEach { socket ->
             runCatching { socket.send(json) }
-                .onFailure { LOGGER.log(Level.WARNING, "Failed to push state update", it) }
+                .onFailure {
+                    LOGGER.log(Level.WARNING, "Failed to push state update", it)
+                    unregister(socket)
+                }
         }
     }
 
@@ -87,17 +90,25 @@ class CastServer(
         return response
     }
 
+    private fun unregister(socket: CastSocket) {
+        if (clients.remove(socket)) {
+            listener.onClientCountChanged(clients.size)
+        }
+    }
+
     private inner class CastSocket(handshakeRequest: IHTTPSession) : WebSocket(handshakeRequest) {
         override fun onOpen() {
             clients += this
-            listener.onClientCountChanged(clients.size)
             runCatching { send(listener.provideStateJson()) }
-                .onFailure { LOGGER.log(Level.WARNING, "Failed to send initial state", it) }
+                .onFailure {
+                    LOGGER.log(Level.WARNING, "Failed to send initial state", it)
+                    unregister(this)
+                }
+            listener.onClientCountChanged(clients.size)
         }
 
         override fun onClose(code: CloseCode, reason: String, initiatedByRemote: Boolean) {
-            clients -= this
-            listener.onClientCountChanged(clients.size)
+            unregister(this)
         }
 
         override fun onMessage(message: WebSocketFrame) {
@@ -108,6 +119,7 @@ class CastServer(
 
         override fun onException(exception: IOException) {
             LOGGER.log(Level.WARNING, "Socket exception", exception)
+            unregister(this)
         }
 
         override fun debugFrameReceived(frame: WebSocketFrame) = Unit
