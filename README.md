@@ -59,10 +59,12 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
 .\gradlew.bat --no-daemon assembleDebug
 ```
 
-Debug APK:
+Debug APKs:
 
-- `app/build/outputs/apk/debug/app-debug.apk`
-- `release/vibe-cast-debug.apk` for direct download from GitHub
+- `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk`
+- `app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk`
+- `release/vibe-cast-arm64-v8a-debug.apk` for direct download from GitHub
+- `release/vibe-cast-armeabi-v7a-debug.apk` for direct download from GitHub
 
 ## Website integration
 
