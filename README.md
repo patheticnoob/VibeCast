@@ -63,8 +63,19 @@ Debug APKs:
 
 - `app/build/outputs/apk/debug/app-arm64-v8a-debug.apk`
 - `app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk`
+- `app/build/outputs/apk/debug/app-x86-debug.apk`
+- `app/build/outputs/apk/debug/app-x86_64-debug.apk`
 - `release/vibe-cast-arm64-v8a-debug.apk` for direct download from GitHub
 - `release/vibe-cast-armeabi-v7a-debug.apk` for direct download from GitHub
+- `release/vibe-cast-x86-debug.apk` for direct download from GitHub
+- `release/vibe-cast-x86_64-debug.apk` for direct download from GitHub
+
+Install notes:
+
+- If Android says `App not installed`, you are usually trying the wrong ABI build or reinstalling the same version over an existing package.
+- This build now uses `versionCode 2` so it can replace the previous `1.0.0` install.
+- On real Android TV hardware, try `arm64-v8a` first, then `armeabi-v7a` if needed.
+- `x86` and `x86_64` are mainly for emulators and the smaller set of Intel-based Android devices.
 
 ## Website integration
 

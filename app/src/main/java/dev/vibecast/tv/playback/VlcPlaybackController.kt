@@ -6,6 +6,7 @@ import androidx.compose.runtime.Immutable
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 
 class VlcPlaybackController(context: Context) {
@@ -22,6 +23,14 @@ class VlcPlaybackController(context: Context) {
 
     private val mediaPlayer = MediaPlayer(libVlc).apply {
         setVideoScale(MediaPlayer.ScaleType.SURFACE_BEST_FIT)
+        configureAudioOutput()
+        setEventListener { event ->
+            when (event.type) {
+                MediaPlayer.Event.Playing,
+                MediaPlayer.Event.ESAdded,
+                MediaPlayer.Event.ESSelected -> ensureAudioTrackSelected()
+            }
+        }
     }
 
     private var attachedLayout: VLCVideoLayout? = null
@@ -47,6 +56,7 @@ class VlcPlaybackController(context: Context) {
 
     fun play(request: PlaybackRequest, positionMs: Long? = null) {
         currentRequest = request
+        configureAudioOutput()
         val media = Media(libVlc, Uri.parse(request.url)).apply {
             // Favor VLC's software path for codec-heavy progressive files.
             setHWDecoderEnabled(false, false)
@@ -60,6 +70,34 @@ class VlcPlaybackController(context: Context) {
         media.release()
         mediaPlayer.play()
         positionMs?.takeIf { it > 0L }?.let { mediaPlayer.setTime(it) }
+    }
+
+    private fun configureAudioOutput() {
+        runCatching { mediaPlayer.setAudioDigitalOutputEnabled(false) }
+        val configured = runCatching { mediaPlayer.setAudioOutput("audiotrack") }.getOrDefault(false)
+        if (!configured) {
+            runCatching { mediaPlayer.setAudioOutput("opensles") }
+        }
+    }
+
+    private fun ensureAudioTrackSelected() {
+        val audioTrackType = IMedia.Track.Type.Audio
+        val selectedTracks = runCatching { mediaPlayer.getSelectedTracks(audioTrackType) }
+            .getOrNull()
+            .orEmpty()
+        if (selectedTracks.isNotEmpty()) {
+            return
+        }
+
+        val firstAudioTrackId = runCatching { mediaPlayer.getTracks(audioTrackType) }
+            .getOrNull()
+            .orEmpty()
+            .firstOrNull()
+            ?.id
+            ?.takeIf { it.isNotBlank() }
+            ?: return
+
+        runCatching { mediaPlayer.selectTracks(audioTrackType, firstAudioTrackId) }
     }
 
     fun pause() {
