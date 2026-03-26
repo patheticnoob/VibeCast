@@ -8,6 +8,7 @@ Vibe Cast is a local-first Android TV receiver that exposes an HTTP controller p
 - Embedded local HTTP/WebSocket server
 - Media3 / ExoPlayer playback for MP4 and HLS
 - Media3 playback for MP4, MKV, WebM, HLS, DASH, SmoothStreaming, and RTSP
+- VLC fallback for progressive MKV / HEVC / E-AC-3 style sources that exceed typical browser or device decoder support
 - QR-based pairing screen
 - Browser controller UI served directly from the TV app
 
@@ -29,6 +30,8 @@ Sample commands:
 { "action": "play", "url": "https://example.com/video.mpd", "format": "dash" }
 { "action": "play", "url": "https://example.com/file.mkv", "format": "mkv" }
 { "action": "play", "url": "https://pub-xxxx.r2.dev/raw", "format": "progressive", "container": "mkv" }
+{ "action": "play", "url": "https://pub-xxxx.r2.dev/raw", "format": "progressive", "container": "mkv", "videoCodec": "hevc", "audioCodec": "eac3" }
+{ "action": "play", "url": "https://pub-xxxx.r2.dev/raw", "format": "progressive", "container": "mkv", "player": "vlc" }
 { "action": "play", "url": "rtsp://192.168.1.5/live", "format": "rtsp" }
 { "action": "play", "url": "https://example.com/protected", "format": "mp4", "headers": { "Referer": "https://example.com" } }
 { "action": "pause" }
@@ -46,6 +49,8 @@ The receiver broadcasts JSON state snapshots back to connected controllers.
 - No Android TV app can guarantee every audio/video codec on every device. Actual decode support still depends on the TV chipset and available hardware/software decoders.
 - For proxy URLs, workers endpoints, or signed URLs without a file extension, send a `format` hint such as `hls`, `dash`, or `progressive`.
 - For progressive opaque URLs, also send a `container` hint such as `mkv`, `mp4`, or `webm`.
+- For codec-heavy MKV files, also send `videoCodec` and `audioCodec` when you know them.
+- `player: "vlc"` forces the VLC playback backend.
 
 ## Build
 

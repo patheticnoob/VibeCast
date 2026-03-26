@@ -5,17 +5,18 @@ import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
 import dev.vibecast.tv.cast.CastServer
 import dev.vibecast.tv.cast.NetworkAddressResolver
 import dev.vibecast.tv.cast.QrCodeBitmapFactory
+import dev.vibecast.tv.playback.PlaybackBackend
 import dev.vibecast.tv.playback.PlaybackMediaFactory
 import dev.vibecast.tv.playback.PlaybackRequest
+import dev.vibecast.tv.playback.VlcPlaybackController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -45,6 +46,8 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
     }
 
     private val playbackMediaFactory = PlaybackMediaFactory(application)
+    val vlcController = VlcPlaybackController(application)
+    private var currentRequest: PlaybackRequest? = null
 
     val player: ExoPlayer = ExoPlayer.Builder(
         application,
@@ -72,11 +75,25 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             refreshPlaybackState()
         }
 
-        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            refreshPlaybackState()
-        }
-
         override fun onPlayerError(error: PlaybackException) {
+            val request = currentRequest
+            if (
+                request != null &&
+                _uiState.value.playbackBackend == PlaybackBackend.EXOPLAYER &&
+                shouldRetryWithVlc(error, request)
+            ) {
+                switchBackend(PlaybackBackend.VLC)
+                vlcController.play(request)
+                _uiState.update {
+                    it.copy(
+                        playbackBackend = PlaybackBackend.VLC,
+                        lastError = null,
+                    )
+                }
+                publishState()
+                return
+            }
+
             _uiState.update {
                 it.copy(
                     lastError = buildPlaybackErrorMessage(error),
@@ -101,6 +118,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         server?.stop()
         player.removeListener(playerListener)
         player.release()
+        vlcController.release()
     }
 
     private fun startServer() {
@@ -199,14 +217,11 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 val payload = json.parseToJsonElement(message).jsonObject
                 when (payload["action"]?.jsonPrimitive?.contentOrNull?.lowercase()) {
                     "play" -> handlePlay(payload)
-                    "pause" -> player.pause()
-                    "resume" -> player.play()
+                    "pause" -> pausePlayback()
+                    "resume" -> resumePlayback()
                     "seek" -> handleSeek(payload)
                     "volume" -> handleVolume(payload)
-                    "stop" -> {
-                        player.stop()
-                        player.clearMediaItems()
-                    }
+                    "stop" -> stopPlayback()
                     "get_state" -> Unit
                     else -> _uiState.update {
                         it.copy(lastError = "Unsupported command received.")
@@ -230,33 +245,45 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        val mediaSource = playbackMediaFactory.createMediaSource(request)
-        player.setMediaSource(mediaSource)
-        player.prepare()
+        currentRequest = request
+        val backend = request.preferredBackend
+        switchBackend(backend)
 
-        payload["positionMs"]?.jsonPrimitive?.longOrNull?.let(player::seekTo)
-        payload["time"]?.jsonPrimitive?.doubleOrNull?.let { seconds ->
-            player.seekTo((seconds * 1_000).toLong())
+        if (backend == PlaybackBackend.VLC) {
+            val positionMs = payload["positionMs"]?.jsonPrimitive?.longOrNull
+                ?: payload["time"]?.jsonPrimitive?.doubleOrNull?.let { (it * 1_000).toLong() }
+            vlcController.play(request, positionMs)
+        } else {
+            val mediaSource = playbackMediaFactory.createMediaSource(request)
+            player.setMediaSource(mediaSource)
+            player.prepare()
+
+            payload["positionMs"]?.jsonPrimitive?.longOrNull?.let(player::seekTo)
+            payload["time"]?.jsonPrimitive?.doubleOrNull?.let { seconds ->
+                player.seekTo((seconds * 1_000).toLong())
+            }
+
+            player.play()
         }
 
-        player.play()
         _uiState.update {
             it.copy(
                 currentMediaUrl = request.url,
+                playbackBackend = backend,
                 lastError = null,
             )
         }
     }
 
     private fun handleSeek(payload: JsonObject) {
-        val duration = player.duration.takeIf { it > 0L } ?: 0L
+        val duration = _uiState.value.durationMs
         val positionMs = payload["positionMs"]?.jsonPrimitive?.longOrNull
             ?: payload["time"]?.jsonPrimitive?.doubleOrNull?.let { (it * 1_000).toLong() }
             ?: payload["progress"]?.jsonPrimitive?.doubleOrNull?.let { fraction ->
                 (duration * fraction.coerceIn(0.0, 1.0)).toLong()
             }
 
-        positionMs?.let { player.seekTo(it.coerceAtLeast(0L)) }
+        positionMs?.let { seekPlayback(it.coerceAtLeast(0L)) }
     }
 
     private fun handleVolume(payload: JsonObject) {
@@ -268,10 +295,36 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             raw > 1.0 -> (raw / 100.0).coerceIn(0.0, 1.0)
             else -> raw.coerceIn(0.0, 1.0)
         }
-        normalized?.let { player.volume = it.toFloat() }
+        normalized?.let { setPlaybackVolume(it) }
     }
 
     private fun refreshPlaybackState() {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            val snapshot = vlcController.snapshot()
+            val playbackPhase = when {
+                _uiState.value.lastError != null -> PlaybackPhase.ERROR
+                snapshot.isPlaying -> PlaybackPhase.PLAYING
+                snapshot.durationMs > 0L || snapshot.currentPositionMs > 0L -> PlaybackPhase.PAUSED
+                else -> PlaybackPhase.IDLE
+            }
+
+            _uiState.update {
+                it.copy(
+                    playbackPhase = playbackPhase,
+                    currentPositionMs = snapshot.currentPositionMs,
+                    durationMs = snapshot.durationMs,
+                    bufferedPercentage = if (snapshot.durationMs > 0L) {
+                        ((snapshot.currentPositionMs * 100L) / snapshot.durationMs).toInt().coerceIn(0, 100)
+                    } else {
+                        0
+                    },
+                    currentMediaUrl = snapshot.currentMediaUrl ?: it.currentMediaUrl,
+                    playbackVolume = snapshot.volume,
+                )
+            }
+            return
+        }
+
         val playbackPhase = when {
             _uiState.value.lastError != null -> PlaybackPhase.ERROR
             player.playbackState == Player.STATE_BUFFERING -> PlaybackPhase.BUFFERING
@@ -293,6 +346,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 durationMs = durationMs,
                 bufferedPercentage = player.bufferedPercentage,
                 currentMediaUrl = currentUrl ?: it.currentMediaUrl,
+                playbackVolume = player.volume.toDouble(),
             )
         }
     }
@@ -312,12 +366,13 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 put("connectionUrl", JsonPrimitive(state.connectionUrl ?: ""))
                 put("webSocketUrl", JsonPrimitive(state.webSocketUrl ?: ""))
                 put("clientCount", JsonPrimitive(state.clientCount))
+                put("playbackBackend", JsonPrimitive(state.playbackBackend.name.lowercase()))
                 put("playbackPhase", JsonPrimitive(state.playbackPhase.name.lowercase()))
-                put("isPlaying", JsonPrimitive(player.isPlaying))
+                put("isPlaying", JsonPrimitive(state.playbackPhase == PlaybackPhase.PLAYING))
                 put("currentPositionMs", JsonPrimitive(state.currentPositionMs))
                 put("durationMs", JsonPrimitive(state.durationMs))
                 put("bufferedPercentage", JsonPrimitive(state.bufferedPercentage))
-                put("volume", JsonPrimitive(player.volume.toDouble()))
+                put("volume", JsonPrimitive(state.playbackVolume))
                 put("currentMediaUrl", JsonPrimitive(state.currentMediaUrl ?: ""))
                 put("lastError", JsonPrimitive(state.lastError ?: ""))
                 putJsonObject("protocol") {
@@ -327,6 +382,9 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                     put("volume", JsonPrimitive("volume + value"))
                     put("format", JsonPrimitive("optional: auto|hls|dash|smoothstreaming|rtsp|progressive|mp4|mkv|webm"))
                     put("container", JsonPrimitive("optional for progressive: mkv|mp4|webm|mp3|aac|flac|wav|ogg"))
+                    put("audioCodec", JsonPrimitive("optional: eac3|ddp|ac3|dts|truehd|aac"))
+                    put("videoCodec", JsonPrimitive("optional: hevc|h265|avc|vp9"))
+                    put("player", JsonPrimitive("optional: exoplayer|vlc"))
                     put("headers", JsonPrimitive("optional: request headers object"))
                 }
             },
@@ -345,6 +403,68 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             else -> "$name${detail?.let { ": $it" } ?: ""}"
         }
     }
+
+    private fun pausePlayback() {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.pause()
+        } else {
+            player.pause()
+        }
+    }
+
+    private fun resumePlayback() {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.resume()
+        } else {
+            player.play()
+        }
+    }
+
+    private fun stopPlayback() {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.stop()
+        } else {
+            player.stop()
+            player.clearMediaItems()
+        }
+    }
+
+    private fun seekPlayback(positionMs: Long) {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.seekTo(positionMs)
+        } else {
+            player.seekTo(positionMs)
+        }
+    }
+
+    private fun setPlaybackVolume(normalized: Double) {
+        if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.setVolume(normalized)
+        } else {
+            player.volume = normalized.toFloat()
+        }
+    }
+
+    private fun switchBackend(target: PlaybackBackend) {
+        if (target == PlaybackBackend.VLC) {
+            player.stop()
+            player.clearMediaItems()
+        } else {
+            vlcController.stop()
+        }
+        _uiState.update { it.copy(playbackBackend = target) }
+    }
+
+    private fun shouldRetryWithVlc(error: PlaybackException, request: PlaybackRequest): Boolean {
+        val message = "${error.errorCodeName} ${error.localizedMessage ?: error.message.orEmpty()}".lowercase()
+        return request.formatHint?.lowercase() == "progressive" && (
+            message.contains("audio") ||
+                message.contains("decoder") ||
+                message.contains("eac3") ||
+                message.contains("ec-3") ||
+                message.contains("dolby")
+            )
+    }
 }
 
 data class ReceiverUiState(
@@ -353,10 +473,12 @@ data class ReceiverUiState(
     val connectionUrl: String? = null,
     val webSocketUrl: String? = null,
     val clientCount: Int = 0,
+    val playbackBackend: PlaybackBackend = PlaybackBackend.EXOPLAYER,
     val playbackPhase: PlaybackPhase = PlaybackPhase.IDLE,
     val currentPositionMs: Long = 0L,
     val durationMs: Long = 0L,
     val bufferedPercentage: Int = 0,
+    val playbackVolume: Double = 1.0,
     val currentMediaUrl: String? = null,
     val lastError: String? = null,
     val qrBitmap: Bitmap? = null,

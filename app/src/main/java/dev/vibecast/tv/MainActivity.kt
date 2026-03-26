@@ -19,6 +19,7 @@ class MainActivity : ComponentActivity() {
             VibeCastApp(
                 uiState = uiState,
                 player = viewModel.player,
+                vlcController = viewModel.vlcController,
             )
         }
     }

@@ -72,6 +72,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer.smoothstreaming)
     implementation(libs.androidx.media3.ui)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.libvlc.all)
     implementation(libs.zxing.core)
 
     debugImplementation(libs.androidx.compose.ui.tooling)

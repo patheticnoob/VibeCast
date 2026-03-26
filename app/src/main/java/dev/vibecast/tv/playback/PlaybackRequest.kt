@@ -10,6 +10,9 @@ data class PlaybackRequest(
     val url: String,
     val formatHint: String? = null,
     val containerHint: String? = null,
+    val audioCodecHint: String? = null,
+    val videoCodecHint: String? = null,
+    val playerHint: String? = null,
     val mimeTypeHint: String? = null,
     val userAgent: String? = null,
     val referer: String? = null,
@@ -18,6 +21,43 @@ data class PlaybackRequest(
 ) {
     val mediaMimeType: String?
         get() = mimeTypeHint ?: inferMimeType(url, formatHint, containerHint)
+
+    val preferredBackend: PlaybackBackend
+        get() {
+            val player = playerHint?.trim()?.lowercase()
+            if (player == "vlc") {
+                return PlaybackBackend.VLC
+            }
+
+            val format = formatHint?.trim()?.lowercase()
+            val container = containerHint?.trim()?.lowercase()
+            val audioCodec = audioCodecHint?.trim()?.lowercase().orEmpty()
+            val videoCodec = videoCodecHint?.trim()?.lowercase().orEmpty()
+
+            val isMkvLike =
+                format == "mkv" ||
+                    format == "matroska" ||
+                    container == "mkv" ||
+                    container == "matroska"
+
+            val needsCodecHeavyFallback =
+                isMkvLike ||
+                    audioCodec.contains("eac3") ||
+                    audioCodec.contains("ec-3") ||
+                    audioCodec.contains("ddp") ||
+                    audioCodec.contains("dolby digital plus") ||
+                    audioCodec.contains("truehd") ||
+                    audioCodec.contains("dts") ||
+                    videoCodec.contains("hevc") ||
+                    videoCodec.contains("h265") ||
+                    videoCodec.contains("h.265")
+
+            return if ((format == "progressive" || isMkvLike) && needsCodecHeavyFallback) {
+                PlaybackBackend.VLC
+            } else {
+                PlaybackBackend.EXOPLAYER
+            }
+        }
 
     companion object {
         fun fromJson(payload: JsonObject): PlaybackRequest? {
@@ -38,6 +78,9 @@ data class PlaybackRequest(
                 formatHint = payload["format"]?.jsonPrimitive?.contentOrNull
                     ?: payload["type"]?.jsonPrimitive?.contentOrNull,
                 containerHint = payload["container"]?.jsonPrimitive?.contentOrNull,
+                audioCodecHint = payload["audioCodec"]?.jsonPrimitive?.contentOrNull,
+                videoCodecHint = payload["videoCodec"]?.jsonPrimitive?.contentOrNull,
+                playerHint = payload["player"]?.jsonPrimitive?.contentOrNull,
                 mimeTypeHint = payload["mimeType"]?.jsonPrimitive?.contentOrNull,
                 userAgent = payload["userAgent"]?.jsonPrimitive?.contentOrNull,
                 referer = payload["referer"]?.jsonPrimitive?.contentOrNull,

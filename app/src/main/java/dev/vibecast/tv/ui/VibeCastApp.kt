@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,11 +39,15 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import dev.vibecast.tv.PlaybackPhase
 import dev.vibecast.tv.ReceiverUiState
+import dev.vibecast.tv.playback.PlaybackBackend
+import dev.vibecast.tv.playback.VlcPlaybackController
+import org.videolan.libvlc.util.VLCVideoLayout
 
 @Composable
 fun VibeCastApp(
     uiState: ReceiverUiState,
     player: Player,
+    vlcController: VlcPlaybackController,
 ) {
     MaterialTheme(
         colorScheme = vibeCastColors(),
@@ -62,7 +67,11 @@ fun VibeCastApp(
                     ),
             ) {
                 if (!uiState.currentMediaUrl.isNullOrBlank()) {
-                    VideoPlayer(player = player)
+                    if (uiState.playbackBackend == PlaybackBackend.VLC) {
+                        VlcVideoPlayer(controller = vlcController)
+                    } else {
+                        VideoPlayer(player = player)
+                    }
                 }
 
                 if (uiState.currentMediaUrl.isNullOrBlank()) {
@@ -104,7 +113,7 @@ private fun PairingScreen(uiState: ReceiverUiState) {
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Scan the QR code from your phone, open the controller page, and stream HLS or MP4 to the TV over your local Wi‑Fi.",
+                text = "Scan the QR code from your phone, open the controller page, and stream local video to the receiver over the same Wi-Fi.",
                 style = MaterialTheme.typography.titleMedium,
                 color = Color(0xFFA9BDD6),
             )
@@ -185,6 +194,12 @@ private fun PlaybackOverlay(uiState: ReceiverUiState) {
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color(0xFFD5E4F8),
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Backend: ${uiState.playbackBackend.name.lowercase()}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFA9BDD6),
+                )
             }
 
             OverlayCard {
@@ -251,6 +266,23 @@ private fun VideoPlayer(player: Player) {
         },
         update = { it.player = player },
     )
+}
+
+@Composable
+private fun VlcVideoPlayer(controller: VlcPlaybackController) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context ->
+            VLCVideoLayout(context).also(controller::bind)
+        },
+        update = controller::bind,
+    )
+
+    DisposableEffect(controller) {
+        onDispose {
+            controller.unbind()
+        }
+    }
 }
 
 @Composable
