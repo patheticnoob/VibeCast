@@ -48,7 +48,9 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
 
     val player: ExoPlayer = ExoPlayer.Builder(
         application,
-        DefaultRenderersFactory(application).forceEnableMediaCodecAsynchronousQueueing(),
+        DefaultRenderersFactory(application)
+            .forceEnableMediaCodecAsynchronousQueueing()
+            .setEnableDecoderFallback(true),
     ).build().apply {
         playWhenReady = true
         repeatMode = Player.REPEAT_MODE_OFF
@@ -324,6 +326,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                     put("seek", JsonPrimitive("seek + positionMs|time|progress"))
                     put("volume", JsonPrimitive("volume + value"))
                     put("format", JsonPrimitive("optional: auto|hls|dash|smoothstreaming|rtsp|progressive|mp4|mkv|webm"))
+                    put("container", JsonPrimitive("optional for progressive: mkv|mp4|webm|mp3|aac|flac|wav|ogg"))
                     put("headers", JsonPrimitive("optional: request headers object"))
                 }
             },

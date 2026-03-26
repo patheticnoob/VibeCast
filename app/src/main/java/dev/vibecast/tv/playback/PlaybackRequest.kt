@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 data class PlaybackRequest(
     val url: String,
     val formatHint: String? = null,
+    val containerHint: String? = null,
     val mimeTypeHint: String? = null,
     val userAgent: String? = null,
     val referer: String? = null,
@@ -16,7 +17,7 @@ data class PlaybackRequest(
     val headers: Map<String, String> = emptyMap(),
 ) {
     val mediaMimeType: String?
-        get() = mimeTypeHint ?: inferMimeType(url, formatHint)
+        get() = mimeTypeHint ?: inferMimeType(url, formatHint, containerHint)
 
     companion object {
         fun fromJson(payload: JsonObject): PlaybackRequest? {
@@ -36,6 +37,7 @@ data class PlaybackRequest(
                 url = url,
                 formatHint = payload["format"]?.jsonPrimitive?.contentOrNull
                     ?: payload["type"]?.jsonPrimitive?.contentOrNull,
+                containerHint = payload["container"]?.jsonPrimitive?.contentOrNull,
                 mimeTypeHint = payload["mimeType"]?.jsonPrimitive?.contentOrNull,
                 userAgent = payload["userAgent"]?.jsonPrimitive?.contentOrNull,
                 referer = payload["referer"]?.jsonPrimitive?.contentOrNull,
@@ -46,7 +48,7 @@ data class PlaybackRequest(
     }
 }
 
-private fun inferMimeType(url: String, formatHint: String?): String? {
+private fun inferMimeType(url: String, formatHint: String?, containerHint: String?): String? {
     val normalizedHint = formatHint?.trim()?.lowercase()
     if (!normalizedHint.isNullOrBlank()) {
         return when (normalizedHint) {
@@ -54,7 +56,7 @@ private fun inferMimeType(url: String, formatHint: String?): String? {
             "dash", "mpd" -> MimeTypes.APPLICATION_MPD
             "smoothstreaming", "ss", "ism" -> MimeTypes.APPLICATION_SS
             "rtsp" -> null
-            "progressive", "file", "direct", "video" -> null
+            "progressive", "file", "direct", "video" -> inferProgressiveMimeType(containerHint)
             "mp4" -> MimeTypes.VIDEO_MP4
             "mkv", "matroska" -> MimeTypes.VIDEO_MATROSKA
             "webm" -> MimeTypes.VIDEO_WEBM
@@ -68,6 +70,7 @@ private fun inferMimeType(url: String, formatHint: String?): String? {
     }
 
     val path = url.substringBefore('?').substringBefore('#').lowercase()
+    inferProgressiveMimeType(containerHint)?.let { return it }
     return when {
         path.endsWith(".m3u8") -> MimeTypes.APPLICATION_M3U8
         path.endsWith(".mpd") -> MimeTypes.APPLICATION_MPD
@@ -81,6 +84,20 @@ private fun inferMimeType(url: String, formatHint: String?): String? {
         path.endsWith(".flac") -> MimeTypes.AUDIO_FLAC
         path.endsWith(".wav") -> MimeTypes.AUDIO_WAV
         path.endsWith(".ogg") || path.endsWith(".opus") -> MimeTypes.AUDIO_OGG
+        else -> null
+    }
+}
+
+private fun inferProgressiveMimeType(containerHint: String?): String? {
+    return when (containerHint?.trim()?.lowercase()) {
+        "mkv", "matroska" -> MimeTypes.VIDEO_MATROSKA
+        "mp4", "m4v" -> MimeTypes.VIDEO_MP4
+        "webm" -> MimeTypes.VIDEO_WEBM
+        "mp3" -> MimeTypes.AUDIO_MPEG
+        "m4a", "aac" -> MimeTypes.AUDIO_AAC
+        "flac" -> MimeTypes.AUDIO_FLAC
+        "wav" -> MimeTypes.AUDIO_WAV
+        "ogg", "opus" -> MimeTypes.AUDIO_OGG
         else -> null
     }
 }

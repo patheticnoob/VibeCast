@@ -28,6 +28,7 @@ Sample commands:
 { "action": "play", "url": "https://example.com/proxy?id=123", "format": "hls" }
 { "action": "play", "url": "https://example.com/video.mpd", "format": "dash" }
 { "action": "play", "url": "https://example.com/file.mkv", "format": "mkv" }
+{ "action": "play", "url": "https://pub-xxxx.r2.dev/raw", "format": "progressive", "container": "mkv" }
 { "action": "play", "url": "rtsp://192.168.1.5/live", "format": "rtsp" }
 { "action": "play", "url": "https://example.com/protected", "format": "mp4", "headers": { "Referer": "https://example.com" } }
 { "action": "pause" }
@@ -43,7 +44,8 @@ The receiver broadcasts JSON state snapshots back to connected controllers.
 - ExoPlayer in this app supports HLS, DASH, SmoothStreaming, RTSP, and progressive files.
 - MKV, MP4, WebM, MP3, AAC, FLAC, WAV, and OGG containers/streams are handled when the TV device has the required decoders.
 - No Android TV app can guarantee every audio/video codec on every device. Actual decode support still depends on the TV chipset and available hardware/software decoders.
-- For proxy URLs, workers endpoints, or signed URLs without a file extension, send a `format` hint such as `hls`, `dash`, `progressive`, `mp4`, or `mkv`.
+- For proxy URLs, workers endpoints, or signed URLs without a file extension, send a `format` hint such as `hls`, `dash`, or `progressive`.
+- For progressive opaque URLs, also send a `container` hint such as `mkv`, `mp4`, or `webm`.
 
 ## Build
 
