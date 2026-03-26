@@ -9,6 +9,7 @@ Vibe Cast is a local-first Android TV receiver that exposes an HTTP controller p
 - Media3 / ExoPlayer playback for MP4 and HLS
 - Media3 playback for MP4, MKV, WebM, HLS, DASH, SmoothStreaming, and RTSP
 - VLC fallback for progressive MKV / HEVC / E-AC-3 style sources that exceed typical browser or device decoder support
+- Local manifest-aware proxy for direct streams and header-protected HLS / DASH style playback paths
 - QR-based pairing screen
 - Browser controller UI served directly from the TV app
 
@@ -34,6 +35,7 @@ Sample commands:
 { "action": "play", "url": "https://pub-xxxx.r2.dev/raw", "format": "progressive", "container": "mkv", "player": "vlc" }
 { "action": "play", "url": "rtsp://192.168.1.5/live", "format": "rtsp" }
 { "action": "play", "url": "https://example.com/protected", "format": "mp4", "headers": { "Referer": "https://example.com" } }
+{ "action": "play", "url": "https://example.com/master.m3u8", "format": "hls", "headers": { "Referer": "https://example.com" }, "proxy": true }
 { "action": "pause" }
 { "action": "resume" }
 { "action": "seek", "positionMs": 120000 }
@@ -51,6 +53,7 @@ The receiver broadcasts JSON state snapshots back to connected controllers.
 - For progressive opaque URLs, also send a `container` hint such as `mkv`, `mp4`, or `webm`.
 - For codec-heavy MKV files, also send `videoCodec` and `audioCodec` when you know them.
 - `player: "vlc"` forces the VLC playback backend.
+- `headers` plus `proxy: true` tells the receiver to proxy the media locally so manifests, segments, keys, and direct files can all inherit the same request headers.
 
 ## Build
 

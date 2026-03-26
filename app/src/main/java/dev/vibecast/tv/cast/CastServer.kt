@@ -3,8 +3,10 @@ package dev.vibecast.tv.cast
 import android.content.res.AssetManager
 import java.io.FilterInputStream
 import java.io.IOException
+import java.net.URI
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -103,7 +105,14 @@ class CastServer(
             )
 
         return runCatching {
-            val connection = (URL(target.url).openConnection() as HttpURLConnection).apply {
+            val upstreamUrl = resolveProxyTargetUrl(
+                proxyRootUrl = target.url,
+                requestUri = session.uri,
+                rawQuery = session.queryParameterString,
+                explicitUpstreamUrl = session.parameters["url"]?.firstOrNull(),
+            )
+
+            val connection = (URL(upstreamUrl).openConnection() as HttpURLConnection).apply {
                 instanceFollowRedirects = true
                 connectTimeout = 15_000
                 readTimeout = 30_000
@@ -119,6 +128,40 @@ class CastServer(
 
             val status = Status.lookup(connection.responseCode) ?: Status.OK
             val mimeType = connection.contentType ?: "application/octet-stream"
+            val resolvedUrl = connection.url.toString()
+            val manifestType = detectManifestType(resolvedUrl, mimeType)
+
+            if (session.method != Method.HEAD && manifestType != ManifestType.NONE) {
+                val body = (connection.errorStream ?: connection.inputStream)
+                    .bufferedReader(StandardCharsets.UTF_8)
+                    .use { it.readText() }
+                connection.disconnect()
+
+                val rewrittenBody = when (manifestType) {
+                    ManifestType.HLS -> rewriteHlsManifest(
+                        body = body,
+                        manifestUrl = resolvedUrl,
+                        proxyId = proxyId,
+                        proxyBaseUrl = buildProxyBaseUrl(session),
+                        rootOrigin = target.rootOrigin,
+                    )
+                    ManifestType.XML -> rewriteXmlManifest(
+                        body = body,
+                        documentUrl = resolvedUrl,
+                        proxyId = proxyId,
+                        proxyBaseUrl = buildProxyBaseUrl(session),
+                        rootOrigin = target.rootOrigin,
+                    )
+                    ManifestType.NONE -> body
+                }
+
+                return withCors(
+                    Response.newFixedLengthResponse(status, mimeType, rewrittenBody).apply {
+                        setRequestMethod(session.method)
+                    },
+                )
+            }
+
             val inputStream = if (session.method == Method.HEAD) {
                 null
             } else {
@@ -147,6 +190,7 @@ class CastServer(
             copyProxyHeader(connection, response, "Accept-Ranges")
             copyProxyHeader(connection, response, "Content-Disposition")
             copyProxyHeader(connection, response, "Cache-Control")
+            copyProxyHeader(connection, response, "Content-Type")
             withCors(response)
         }.getOrElse { error ->
             LOGGER.log(Level.WARNING, "Proxy request failed for $proxyId", error)
@@ -158,6 +202,145 @@ class CastServer(
                 ),
             )
         }
+    }
+
+    private fun detectManifestType(url: String, mimeType: String): ManifestType {
+        val normalizedMimeType = mimeType.lowercase()
+        val normalizedPath = url.substringBefore('?').substringBefore('#').lowercase()
+
+        return when {
+            normalizedMimeType.contains("mpegurl") || normalizedPath.endsWith(".m3u8") -> ManifestType.HLS
+            normalizedMimeType.contains("dash+xml") ||
+                normalizedMimeType.contains("smoothstreaming") ||
+                normalizedPath.endsWith(".mpd") ||
+                normalizedPath.endsWith(".ism") ||
+                normalizedPath.endsWith(".isml") ||
+                normalizedPath.endsWith("/manifest") -> ManifestType.XML
+            else -> ManifestType.NONE
+        }
+    }
+
+    private fun rewriteHlsManifest(
+        body: String,
+        manifestUrl: String,
+        proxyId: String,
+        proxyBaseUrl: String,
+        rootOrigin: String?,
+    ): String {
+        return body.lineSequence()
+            .joinToString("\n") { line ->
+                when {
+                    line.isBlank() -> line
+                    line.startsWith("#") -> rewriteHlsDirectiveLine(line, manifestUrl, proxyId, proxyBaseUrl, rootOrigin)
+                    else -> proxifyReference(line.trim(), manifestUrl, proxyId, proxyBaseUrl, rootOrigin)
+                }
+            }
+    }
+
+    private fun rewriteHlsDirectiveLine(
+        line: String,
+        manifestUrl: String,
+        proxyId: String,
+        proxyBaseUrl: String,
+        rootOrigin: String?,
+    ): String {
+        return HLS_URI_ATTRIBUTE.replace(line) { match ->
+            val original = match.groupValues[1]
+            val rewritten = proxifyReference(original, manifestUrl, proxyId, proxyBaseUrl, rootOrigin)
+            "URI=\"$rewritten\""
+        }
+    }
+
+    private fun rewriteXmlManifest(
+        body: String,
+        documentUrl: String,
+        proxyId: String,
+        proxyBaseUrl: String,
+        rootOrigin: String?,
+    ): String {
+        var rewritten = XML_URL_ATTRIBUTE.replace(body) { match ->
+            val prefix = match.groupValues[1]
+            val original = match.groupValues[2]
+            val suffix = match.groupValues[3]
+            val updated = proxifyXmlReference(original, documentUrl, proxyId, proxyBaseUrl, rootOrigin)
+            "$prefix$updated$suffix"
+        }
+
+        rewritten = XML_BASE_URL.replace(rewritten) { match ->
+            val original = match.groupValues[1].trim()
+            val updated = proxifyXmlReference(original, documentUrl, proxyId, proxyBaseUrl, rootOrigin)
+            "<BaseURL>$updated</BaseURL>"
+        }
+
+        return rewritten
+    }
+
+    private fun proxifyXmlReference(
+        value: String,
+        documentUrl: String,
+        proxyId: String,
+        proxyBaseUrl: String,
+        rootOrigin: String?,
+    ): String {
+        if (!looksLikeProxyCandidate(value)) {
+            return value
+        }
+        return proxifyReference(value, documentUrl, proxyId, proxyBaseUrl, rootOrigin)
+    }
+
+    private fun proxifyReference(
+        value: String,
+        baseUrl: String,
+        proxyId: String,
+        proxyBaseUrl: String,
+        rootOrigin: String?,
+    ): String {
+        if (!looksLikeProxyCandidate(value)) {
+            return value
+        }
+
+        val resolvedUrl = resolveReference(baseUrl, value)
+        return buildLocalProxyUrl(
+            baseUrl = proxyBaseUrl,
+            proxyId = proxyId,
+            upstreamUrl = resolvedUrl,
+            rootOrigin = rootOrigin,
+        )
+    }
+
+    private fun resolveReference(baseUrl: String, value: String): String {
+        return when {
+            value.startsWith("//") -> {
+                val base = URI(baseUrl)
+                "${base.scheme}:$value"
+            }
+            value.startsWith("http://") || value.startsWith("https://") -> value
+            value.startsWith("/") -> {
+                val base = URI(baseUrl)
+                "${base.scheme}://${base.authority}$value"
+            }
+            else -> URI(baseUrl).resolve(value).toString()
+        }
+    }
+
+    private fun buildProxyBaseUrl(session: IHTTPSession): String {
+        val host = session.headers["host"] ?: throw IllegalStateException("Missing host header")
+        return "http://$host"
+    }
+
+    private fun looksLikeProxyCandidate(value: String): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) {
+            return false
+        }
+
+        return trimmed.startsWith("http://") ||
+            trimmed.startsWith("https://") ||
+            trimmed.startsWith("//") ||
+            trimmed.startsWith("/") ||
+            trimmed.startsWith("./") ||
+            trimmed.startsWith("../") ||
+            (!trimmed.startsWith("#") && !trimmed.contains("://"))
     }
 
     private fun copyProxyHeader(connection: HttpURLConnection, response: Response, headerName: String) {
@@ -211,5 +394,14 @@ class CastServer(
     companion object {
         private val LOGGER = Logger.getLogger(CastServer::class.java.name)
         const val SOCKET_READ_TIMEOUT: Int = 5_000
+        private val HLS_URI_ATTRIBUTE = Regex("""URI="([^"]+)"""")
+        private val XML_URL_ATTRIBUTE = Regex("""((?:media|Media|initialization|Initialization|sourceURL|SourceURL|Url|url|src|Src|href|Href)=")([^"]+)(")""")
+        private val XML_BASE_URL = Regex("""<BaseURL>([^<]+)</BaseURL>""")
     }
+}
+
+private enum class ManifestType {
+    NONE,
+    HLS,
+    XML,
 }

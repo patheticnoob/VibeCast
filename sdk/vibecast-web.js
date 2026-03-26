@@ -1,5 +1,34 @@
 (function (global) {
   const STORAGE_KEY = "vibe_cast_receiver";
+  const LAUNCH_DEDUPE_KEY = "vibe_cast_last_launch";
+
+  function buildLaunchPayload(url, options = {}) {
+    const payload = { url, ...options };
+    Object.keys(payload).forEach((key) => {
+      if (payload[key] == null || payload[key] === "") {
+        delete payload[key];
+      }
+    });
+    return payload;
+  }
+
+  function shouldLaunch(url) {
+    try {
+      const raw = sessionStorage.getItem(LAUNCH_DEDUPE_KEY);
+      const now = Date.now();
+      if (raw) {
+        const previous = JSON.parse(raw);
+        if (previous.url === url && now - previous.at < 6000) {
+          return false;
+        }
+      }
+      sessionStorage.setItem(LAUNCH_DEDUPE_KEY, JSON.stringify({ url, at: now }));
+    } catch (error) {
+      return true;
+    }
+
+    return true;
+  }
 
   class VibeCastClient extends EventTarget {
     constructor(options = {}) {
@@ -52,16 +81,27 @@
       return `ws://${this.host}:${this.port}/ws`;
     }
 
-    getLaunchUrl(mediaUrl = "") {
+    getLaunchUrl(mediaUrl = "", options = {}) {
       const base = this.getHttpBaseUrl();
-      if (!mediaUrl) {
+      if (!mediaUrl && Object.keys(options).length === 0) {
         return `${base}/`;
       }
-      return `${base}/?play=${encodeURIComponent(mediaUrl)}`;
+
+      const payload = buildLaunchPayload(mediaUrl, options);
+      if (Object.keys(options).length === 0) {
+        return `${base}/?play=${encodeURIComponent(mediaUrl)}`;
+      }
+
+      return `${base}/?payload=${encodeURIComponent(JSON.stringify(payload))}`;
     }
 
-    launchController(mediaUrl = "", target = "_blank") {
-      const url = this.getLaunchUrl(mediaUrl);
+    launchController(mediaUrl = "", optionsOrTarget = {}, maybeTarget = "_blank") {
+      const options = typeof optionsOrTarget === "string" ? {} : (optionsOrTarget || {});
+      const target = typeof optionsOrTarget === "string" ? optionsOrTarget : maybeTarget;
+      const url = this.getLaunchUrl(mediaUrl, options);
+      if (!shouldLaunch(url)) {
+        return url;
+      }
       window.open(url, target, "noopener,noreferrer");
       return url;
     }

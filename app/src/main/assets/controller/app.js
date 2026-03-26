@@ -28,6 +28,7 @@ const currentMedia = document.getElementById('current-media');
 const OFF_TRACK_ID = '__off__';
 const AUTOPLAY_DEDUPE_KEY = 'vibe_cast_last_autoplay_dispatch';
 const params = new URLSearchParams(location.search);
+const pendingAutoPlayPayload = parsePayloadQuery(params.get('payload'));
 let pendingAutoPlayUrl = params.get('play') || params.get('url') || '';
 let autoPlayDispatched = false;
 
@@ -51,6 +52,17 @@ function connect() {
     socketState.textContent = 'Connected';
     socketState.classList.remove('muted');
     send({ action: 'get_state' });
+    if (!autoPlayDispatched && pendingAutoPlayPayload) {
+      autoPlayDispatched = true;
+      hydrateFormFromPayload(pendingAutoPlayPayload);
+      if (shouldDispatchAutoPlay(JSON.stringify(pendingAutoPlayPayload))) {
+        send({ action: 'play', ...pendingAutoPlayPayload });
+      }
+      clearAutoPlayQuery();
+      pendingAutoPlayUrl = '';
+      return;
+    }
+
     if (pendingAutoPlayUrl && !autoPlayDispatched) {
       autoPlayDispatched = true;
       mediaUrl.value = pendingAutoPlayUrl;
@@ -158,6 +170,7 @@ function sendPlay() {
 function clearAutoPlayQuery() {
   params.delete('play');
   params.delete('url');
+  params.delete('payload');
   const query = params.toString();
   const nextUrl = query ? `${location.pathname}?${query}` : location.pathname;
   history.replaceState({}, '', nextUrl);
@@ -179,6 +192,44 @@ function shouldDispatchAutoPlay(url) {
 
   localStorage.setItem(AUTOPLAY_DEDUPE_KEY, JSON.stringify({ url, at: now }));
   return true;
+}
+
+function parsePayloadQuery(rawPayload) {
+  if (!rawPayload) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(rawPayload);
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch (error) {
+    console.warn('Invalid Vibe Cast payload query', error);
+    return null;
+  }
+}
+
+function hydrateFormFromPayload(payload) {
+  if (payload.title) {
+    titleInput.value = payload.title;
+  }
+  if (payload.url) {
+    mediaUrl.value = payload.url;
+  }
+  if (payload.format) {
+    formatSelect.value = payload.format;
+  }
+  if (payload.subtitleUrl) {
+    subtitleUrl.value = payload.subtitleUrl;
+  }
+  if (payload.subtitleMimeType) {
+    subtitleType.value = payload.subtitleMimeType;
+  }
+  if (payload.subtitleLanguage) {
+    subtitleLanguage.value = payload.subtitleLanguage;
+  }
+  if (payload.headers && typeof payload.headers === 'object') {
+    headersJson.value = JSON.stringify(payload.headers, null, 2);
+  }
 }
 
 function applyState(state) {

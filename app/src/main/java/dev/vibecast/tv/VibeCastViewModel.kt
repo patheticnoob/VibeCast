@@ -18,6 +18,8 @@ import dev.vibecast.tv.cast.CastServer
 import dev.vibecast.tv.cast.NetworkAddressResolver
 import dev.vibecast.tv.cast.QrCodeBitmapFactory
 import dev.vibecast.tv.cast.StreamProxyTarget
+import dev.vibecast.tv.cast.buildLocalProxyUrl
+import dev.vibecast.tv.cast.originOf
 import dev.vibecast.tv.playback.MediaTrackInfo
 import dev.vibecast.tv.playback.OFF_TRACK_ID
 import dev.vibecast.tv.playback.PlaybackBackend
@@ -683,7 +685,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
 
     private fun preparePlaybackRequest(request: PlaybackRequest): PlaybackRequest {
         val proxyHeaders = buildProxyHeaders(request)
-        val shouldProxy = request.useProxy || (proxyHeaders.isNotEmpty() && isProxyFriendlyRequest(request))
+        val shouldProxy = request.useProxy || proxyHeaders.isNotEmpty()
         val baseUrl = _uiState.value.connectionUrl
         if (!shouldProxy || baseUrl.isNullOrBlank()) {
             return request
@@ -693,11 +695,28 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         streamProxyTargets[proxyId] = StreamProxyTarget(
             url = request.url,
             headers = proxyHeaders,
+            rootOrigin = originOf(request.url),
+        )
+
+        val proxiedMediaUrl = buildLocalProxyUrl(
+            baseUrl = baseUrl,
+            proxyId = proxyId,
+            upstreamUrl = request.url,
+            rootOrigin = originOf(request.url),
+        )
+        val proxiedSubtitle = request.subtitle?.copy(
+            url = buildLocalProxyUrl(
+                baseUrl = baseUrl,
+                proxyId = proxyId,
+                upstreamUrl = request.subtitle.url,
+                rootOrigin = originOf(request.url),
+            ),
         )
 
         return request.copy(
-            url = "$baseUrl/proxy/$proxyId",
+            url = proxiedMediaUrl,
             displayUrl = request.effectiveDisplayUrl,
+            subtitle = proxiedSubtitle,
             userAgent = null,
             referer = null,
             origin = null,
@@ -711,15 +730,6 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             request.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
             request.origin?.takeIf { it.isNotBlank() }?.let { put("Origin", it) }
             request.userAgent?.takeIf { it.isNotBlank() }?.let { put("User-Agent", it) }
-        }
-    }
-
-    private fun isProxyFriendlyRequest(request: PlaybackRequest): Boolean {
-        return when (request.formatHint?.trim()?.lowercase()) {
-            "hls",
-            "dash",
-            "smoothstreaming" -> false
-            else -> true
         }
     }
 
