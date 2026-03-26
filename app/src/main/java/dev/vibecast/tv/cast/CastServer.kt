@@ -1,7 +1,10 @@
 package dev.vibecast.tv.cast
 
 import android.content.res.AssetManager
+import java.io.FilterInputStream
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -25,6 +28,7 @@ class CastServer(
         fun onClientCountChanged(count: Int)
         fun onCommand(message: String)
         fun provideStateJson(): String
+        fun resolveStreamProxy(proxyId: String): StreamProxyTarget?
     }
 
     private val clients = CopyOnWriteArraySet<CastSocket>()
@@ -41,13 +45,17 @@ class CastServer(
             "/app.js" -> assetResponse("controller/app.js", "application/javascript; charset=utf-8")
             "/styles.css" -> assetResponse("controller/styles.css", "text/css; charset=utf-8")
             "/state" -> jsonResponse(listener.provideStateJson())
-            else -> withCors(
-                Response.newFixedLengthResponse(
-                    Status.NOT_FOUND,
-                    NanoHTTPD.MIME_PLAINTEXT,
-                    "Not found",
-                ),
-            )
+            else -> if (session.uri.startsWith("/proxy/")) {
+                proxyResponse(session)
+            } else {
+                withCors(
+                    Response.newFixedLengthResponse(
+                        Status.NOT_FOUND,
+                        NanoHTTPD.MIME_PLAINTEXT,
+                        "Not found",
+                    ),
+                )
+            }
         }
     }
 
@@ -81,6 +89,79 @@ class CastServer(
         return withCors(
             Response.newFixedLengthResponse(Status.OK, "application/json; charset=utf-8", body),
         )
+    }
+
+    private fun proxyResponse(session: IHTTPSession): Response {
+        val proxyId = session.uri.substringAfter("/proxy/").substringBefore('?')
+        val target = listener.resolveStreamProxy(proxyId)
+            ?: return withCors(
+                Response.newFixedLengthResponse(
+                    Status.NOT_FOUND,
+                    NanoHTTPD.MIME_PLAINTEXT,
+                    "Missing proxy target",
+                ),
+            )
+
+        return runCatching {
+            val connection = (URL(target.url).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                requestMethod = if (session.method == Method.HEAD) "HEAD" else "GET"
+                target.headers.forEach { (key, value) ->
+                    if (value.isNotBlank()) {
+                        setRequestProperty(key, value)
+                    }
+                }
+                session.headers["range"]?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Range", it) }
+                connect()
+            }
+
+            val status = Status.lookup(connection.responseCode) ?: Status.OK
+            val mimeType = connection.contentType ?: "application/octet-stream"
+            val inputStream = if (session.method == Method.HEAD) {
+                null
+            } else {
+                connection.errorStream ?: connection.inputStream
+            }
+
+            val response = if (inputStream != null) {
+                Response.newChunkedResponse(
+                    status,
+                    mimeType,
+                    object : FilterInputStream(inputStream) {
+                        override fun close() {
+                            super.close()
+                            connection.disconnect()
+                        }
+                    },
+                )
+            } else {
+                connection.disconnect()
+                Response.newFixedLengthResponse(status, mimeType, "")
+            }
+
+            response.setRequestMethod(session.method)
+            copyProxyHeader(connection, response, "Content-Length")
+            copyProxyHeader(connection, response, "Content-Range")
+            copyProxyHeader(connection, response, "Accept-Ranges")
+            copyProxyHeader(connection, response, "Content-Disposition")
+            copyProxyHeader(connection, response, "Cache-Control")
+            withCors(response)
+        }.getOrElse { error ->
+            LOGGER.log(Level.WARNING, "Proxy request failed for $proxyId", error)
+            withCors(
+                Response.newFixedLengthResponse(
+                    Status.BAD_REQUEST,
+                    NanoHTTPD.MIME_PLAINTEXT,
+                    "Proxy request failed: ${error.localizedMessage}",
+                ),
+            )
+        }
+    }
+
+    private fun copyProxyHeader(connection: HttpURLConnection, response: Response, headerName: String) {
+        connection.getHeaderField(headerName)?.takeIf { it.isNotBlank() }?.let { response.addHeader(headerName, it) }
     }
 
     private fun withCors(response: Response): Response {

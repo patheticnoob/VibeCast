@@ -2,16 +2,19 @@ package dev.vibecast.tv.playback
 
 import androidx.media3.common.MimeTypes
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 data class PlaybackRequest(
     val url: String,
+    val displayUrl: String? = null,
     val title: String? = null,
     val subtitle: SubtitleSource? = null,
     val audioTrackId: String? = null,
     val subtitleTrackId: String? = null,
+    val useProxy: Boolean = false,
     val formatHint: String? = null,
     val containerHint: String? = null,
     val audioCodecHint: String? = null,
@@ -28,6 +31,9 @@ data class PlaybackRequest(
 
     val subtitleMimeType: String?
         get() = subtitle?.mimeType ?: subtitle?.url?.let(::inferSubtitleMimeType)
+
+    val effectiveDisplayUrl: String
+        get() = displayUrl ?: url
 
     val preferredBackend: PlaybackBackend
         get() {
@@ -83,10 +89,13 @@ data class PlaybackRequest(
 
             return PlaybackRequest(
                 url = url,
+                displayUrl = payload["displayUrl"]?.jsonPrimitive?.contentOrNull,
                 title = payload["title"]?.jsonPrimitive?.contentOrNull,
                 subtitle = parseSubtitle(payload),
                 audioTrackId = payload["audioTrackId"]?.jsonPrimitive?.contentOrNull,
                 subtitleTrackId = payload["subtitleTrackId"]?.jsonPrimitive?.contentOrNull,
+                useProxy = payload["proxy"]?.jsonPrimitive?.booleanOrNull == true ||
+                    payload["useProxy"]?.jsonPrimitive?.booleanOrNull == true,
                 formatHint = payload["format"]?.jsonPrimitive?.contentOrNull
                     ?: payload["type"]?.jsonPrimitive?.contentOrNull,
                 containerHint = payload["container"]?.jsonPrimitive?.contentOrNull,

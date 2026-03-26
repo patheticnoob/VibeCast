@@ -155,7 +155,7 @@ class VlcPlaybackController(context: Context) {
             currentPositionMs = mediaPlayer.getTime().coerceAtLeast(0L),
             durationMs = mediaPlayer.getLength().coerceAtLeast(0L),
             volume = volume,
-            currentMediaUrl = currentRequest?.url,
+            currentMediaUrl = currentRequest?.effectiveDisplayUrl,
         )
     }
 

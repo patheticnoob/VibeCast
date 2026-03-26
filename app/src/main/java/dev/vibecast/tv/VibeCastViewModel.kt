@@ -17,12 +17,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import dev.vibecast.tv.cast.CastServer
 import dev.vibecast.tv.cast.NetworkAddressResolver
 import dev.vibecast.tv.cast.QrCodeBitmapFactory
+import dev.vibecast.tv.cast.StreamProxyTarget
 import dev.vibecast.tv.playback.MediaTrackInfo
 import dev.vibecast.tv.playback.OFF_TRACK_ID
 import dev.vibecast.tv.playback.PlaybackBackend
 import dev.vibecast.tv.playback.PlaybackMediaFactory
 import dev.vibecast.tv.playback.PlaybackRequest
 import dev.vibecast.tv.playback.VlcPlaybackController
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -72,6 +75,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
 
     private var exoAudioTrackHandles: Map<String, ExoTrackHandle> = emptyMap()
     private var exoSubtitleTrackHandles: Map<String, ExoTrackHandle> = emptyMap()
+    private val streamProxyTargets = ConcurrentHashMap<String, StreamProxyTarget>()
 
     val player: ExoPlayer = ExoPlayer.Builder(
         application,
@@ -230,6 +234,10 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                             }
 
                             override fun provideStateJson(): String = statePayload()
+
+                            override fun resolveStreamProxy(proxyId: String): StreamProxyTarget? {
+                                return streamProxyTargets[proxyId]
+                            }
                         },
                     )
                     castServer.start(CastServer.SOCKET_READ_TIMEOUT, false)
@@ -330,12 +338,14 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun handlePlay(payload: JsonObject) {
-        val request = PlaybackRequest.fromJson(payload)
-        if (request == null) {
+        streamProxyTargets.clear()
+        val originalRequest = PlaybackRequest.fromJson(payload)
+        if (originalRequest == null) {
             _uiState.update { it.copy(lastError = "Missing media URL in play command.") }
             return
         }
 
+        val request = preparePlaybackRequest(originalRequest)
         currentRequest = request
         pendingAudioTrackId = request.audioTrackId
         pendingSubtitleTrackId = request.subtitleTrackId
@@ -367,8 +377,8 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
 
         _uiState.update {
             it.copy(
-                currentMediaUrl = request.url,
-                currentTitle = request.title?.takeIf(String::isNotBlank) ?: deriveTitleFromUrl(request.url),
+                currentMediaUrl = originalRequest.effectiveDisplayUrl,
+                currentTitle = originalRequest.title?.takeIf(String::isNotBlank) ?: deriveTitleFromUrl(originalRequest.url),
                 playbackBackend = backend,
                 audioTracks = emptyList(),
                 subtitleTracks = emptyList(),
@@ -627,6 +637,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         shouldAutoEnableSubtitleTrack = false
         exoAudioTrackHandles = emptyMap()
         exoSubtitleTrackHandles = emptyMap()
+        streamProxyTargets.clear()
         _uiState.update {
             it.copy(
                 playbackPhase = PlaybackPhase.IDLE,
@@ -668,6 +679,48 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             vlcController.stop()
         }
         _uiState.update { it.copy(playbackBackend = target) }
+    }
+
+    private fun preparePlaybackRequest(request: PlaybackRequest): PlaybackRequest {
+        val proxyHeaders = buildProxyHeaders(request)
+        val shouldProxy = request.useProxy || (proxyHeaders.isNotEmpty() && isProxyFriendlyRequest(request))
+        val baseUrl = _uiState.value.connectionUrl
+        if (!shouldProxy || baseUrl.isNullOrBlank()) {
+            return request
+        }
+
+        val proxyId = UUID.randomUUID().toString()
+        streamProxyTargets[proxyId] = StreamProxyTarget(
+            url = request.url,
+            headers = proxyHeaders,
+        )
+
+        return request.copy(
+            url = "$baseUrl/proxy/$proxyId",
+            displayUrl = request.effectiveDisplayUrl,
+            userAgent = null,
+            referer = null,
+            origin = null,
+            headers = emptyMap(),
+        )
+    }
+
+    private fun buildProxyHeaders(request: PlaybackRequest): Map<String, String> {
+        return buildMap {
+            putAll(request.headers)
+            request.referer?.takeIf { it.isNotBlank() }?.let { put("Referer", it) }
+            request.origin?.takeIf { it.isNotBlank() }?.let { put("Origin", it) }
+            request.userAgent?.takeIf { it.isNotBlank() }?.let { put("User-Agent", it) }
+        }
+    }
+
+    private fun isProxyFriendlyRequest(request: PlaybackRequest): Boolean {
+        return when (request.formatHint?.trim()?.lowercase()) {
+            "hls",
+            "dash",
+            "smoothstreaming" -> false
+            else -> true
+        }
     }
 
     private fun shouldRetryWithVlc(error: PlaybackException, request: PlaybackRequest): Boolean {

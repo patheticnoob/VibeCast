@@ -5,6 +5,7 @@ const mediaUrl = document.getElementById('media-url');
 const subtitleUrl = document.getElementById('subtitle-url');
 const subtitleType = document.getElementById('subtitle-type');
 const subtitleLanguage = document.getElementById('subtitle-language');
+const headersJson = document.getElementById('headers-json');
 const formatSelect = document.getElementById('format-select');
 const playBtn = document.getElementById('play-btn');
 const pauseBtn = document.getElementById('pause-btn');
@@ -25,6 +26,7 @@ const currentTitle = document.getElementById('current-title');
 const currentMedia = document.getElementById('current-media');
 
 const OFF_TRACK_ID = '__off__';
+const AUTOPLAY_DEDUPE_KEY = 'vibe_cast_last_autoplay_dispatch';
 const params = new URLSearchParams(location.search);
 let pendingAutoPlayUrl = params.get('play') || params.get('url') || '';
 let autoPlayDispatched = false;
@@ -52,7 +54,9 @@ function connect() {
     if (pendingAutoPlayUrl && !autoPlayDispatched) {
       autoPlayDispatched = true;
       mediaUrl.value = pendingAutoPlayUrl;
-      sendPlay();
+      if (shouldDispatchAutoPlay(pendingAutoPlayUrl)) {
+        sendPlay();
+      }
       clearAutoPlayQuery();
       pendingAutoPlayUrl = '';
     }
@@ -105,6 +109,18 @@ function sendPlay() {
   const subtitle = subtitleUrl.value.trim();
   const subtitleMimeType = subtitleType.value.trim();
   const subtitleLang = subtitleLanguage.value.trim();
+  const headersText = headersJson.value.trim();
+  let parsedHeaders = null;
+
+  if (headersText) {
+    try {
+      parsedHeaders = JSON.parse(headersText);
+    } catch (error) {
+      window.alert('Headers JSON is invalid.');
+      headersJson.focus();
+      return;
+    }
+  }
 
   if (title) {
     payload.title = title;
@@ -124,11 +140,17 @@ function sendPlay() {
     }
   }
 
+  if (parsedHeaders && typeof parsedHeaders === 'object' && !Array.isArray(parsedHeaders)) {
+    payload.headers = parsedHeaders;
+    payload.proxy = true;
+  }
+
   localStorage.setItem('vibe_cast_last_media_url', url);
   localStorage.setItem('vibe_cast_last_title', title);
   localStorage.setItem('vibe_cast_last_subtitle_url', subtitle);
   localStorage.setItem('vibe_cast_last_subtitle_type', subtitleMimeType);
   localStorage.setItem('vibe_cast_last_subtitle_language', subtitleLang);
+  localStorage.setItem('vibe_cast_last_headers_json', headersText);
 
   send(payload);
 }
@@ -139,6 +161,24 @@ function clearAutoPlayQuery() {
   const query = params.toString();
   const nextUrl = query ? `${location.pathname}?${query}` : location.pathname;
   history.replaceState({}, '', nextUrl);
+}
+
+function shouldDispatchAutoPlay(url) {
+  const now = Date.now();
+  try {
+    const raw = localStorage.getItem(AUTOPLAY_DEDUPE_KEY);
+    if (raw) {
+      const previous = JSON.parse(raw);
+      if (previous.url === url && now - previous.at < 8000) {
+        return false;
+      }
+    }
+  } catch (error) {
+    console.warn('Autoplay dedupe state unreadable', error);
+  }
+
+  localStorage.setItem(AUTOPLAY_DEDUPE_KEY, JSON.stringify({ url, at: now }));
+  return true;
 }
 
 function applyState(state) {
@@ -298,6 +338,7 @@ titleInput.value = localStorage.getItem('vibe_cast_last_title') || '';
 subtitleUrl.value = localStorage.getItem('vibe_cast_last_subtitle_url') || '';
 subtitleType.value = localStorage.getItem('vibe_cast_last_subtitle_type') || '';
 subtitleLanguage.value = localStorage.getItem('vibe_cast_last_subtitle_language') || '';
+headersJson.value = localStorage.getItem('vibe_cast_last_headers_json') || '';
 
 if (pendingAutoPlayUrl) {
   mediaUrl.value = pendingAutoPlayUrl;
