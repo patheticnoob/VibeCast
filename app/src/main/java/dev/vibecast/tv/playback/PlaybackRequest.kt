@@ -8,6 +8,10 @@ import kotlinx.serialization.json.jsonPrimitive
 
 data class PlaybackRequest(
     val url: String,
+    val title: String? = null,
+    val subtitle: SubtitleSource? = null,
+    val audioTrackId: String? = null,
+    val subtitleTrackId: String? = null,
     val formatHint: String? = null,
     val containerHint: String? = null,
     val audioCodecHint: String? = null,
@@ -21,6 +25,9 @@ data class PlaybackRequest(
 ) {
     val mediaMimeType: String?
         get() = mimeTypeHint ?: inferMimeType(url, formatHint, containerHint)
+
+    val subtitleMimeType: String?
+        get() = subtitle?.mimeType ?: subtitle?.url?.let(::inferSubtitleMimeType)
 
     val preferredBackend: PlaybackBackend
         get() {
@@ -76,6 +83,10 @@ data class PlaybackRequest(
 
             return PlaybackRequest(
                 url = url,
+                title = payload["title"]?.jsonPrimitive?.contentOrNull,
+                subtitle = parseSubtitle(payload),
+                audioTrackId = payload["audioTrackId"]?.jsonPrimitive?.contentOrNull,
+                subtitleTrackId = payload["subtitleTrackId"]?.jsonPrimitive?.contentOrNull,
                 formatHint = payload["format"]?.jsonPrimitive?.contentOrNull
                     ?: payload["type"]?.jsonPrimitive?.contentOrNull,
                 containerHint = payload["container"]?.jsonPrimitive?.contentOrNull,
@@ -87,6 +98,25 @@ data class PlaybackRequest(
                 referer = payload["referer"]?.jsonPrimitive?.contentOrNull,
                 origin = payload["origin"]?.jsonPrimitive?.contentOrNull,
                 headers = headers,
+            )
+        }
+
+        private fun parseSubtitle(payload: JsonObject): SubtitleSource? {
+            val subtitleObject = payload["subtitle"]?.jsonObject
+            val url = subtitleObject?.get("url")?.jsonPrimitive?.contentOrNull
+                ?: payload["subtitleUrl"]?.jsonPrimitive?.contentOrNull
+            if (url.isNullOrBlank()) {
+                return null
+            }
+
+            return SubtitleSource(
+                url = url,
+                mimeType = subtitleObject?.get("mimeType")?.jsonPrimitive?.contentOrNull
+                    ?: payload["subtitleMimeType"]?.jsonPrimitive?.contentOrNull,
+                language = subtitleObject?.get("language")?.jsonPrimitive?.contentOrNull
+                    ?: payload["subtitleLanguage"]?.jsonPrimitive?.contentOrNull,
+                label = subtitleObject?.get("label")?.jsonPrimitive?.contentOrNull
+                    ?: payload["subtitleLabel"]?.jsonPrimitive?.contentOrNull,
             )
         }
     }
@@ -142,6 +172,17 @@ private fun inferProgressiveMimeType(containerHint: String?): String? {
         "flac" -> MimeTypes.AUDIO_FLAC
         "wav" -> MimeTypes.AUDIO_WAV
         "ogg", "opus" -> MimeTypes.AUDIO_OGG
+        else -> null
+    }
+}
+
+private fun inferSubtitleMimeType(url: String): String? {
+    val path = url.substringBefore('?').substringBefore('#').lowercase()
+    return when {
+        path.endsWith(".vtt") || path.endsWith(".webvtt") -> MimeTypes.TEXT_VTT
+        path.endsWith(".srt") -> MimeTypes.APPLICATION_SUBRIP
+        path.endsWith(".ttml") || path.endsWith(".xml") || path.endsWith(".dfxp") -> MimeTypes.APPLICATION_TTML
+        path.endsWith(".ssa") || path.endsWith(".ass") -> MimeTypes.TEXT_SSA
         else -> null
     }
 }

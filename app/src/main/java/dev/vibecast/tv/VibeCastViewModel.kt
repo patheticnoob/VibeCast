@@ -5,14 +5,20 @@ import android.graphics.Bitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import dev.vibecast.tv.cast.CastServer
 import dev.vibecast.tv.cast.NetworkAddressResolver
 import dev.vibecast.tv.cast.QrCodeBitmapFactory
+import dev.vibecast.tv.playback.MediaTrackInfo
+import dev.vibecast.tv.playback.OFF_TRACK_ID
 import dev.vibecast.tv.playback.PlaybackBackend
 import dev.vibecast.tv.playback.PlaybackMediaFactory
 import dev.vibecast.tv.playback.PlaybackRequest
@@ -29,6 +35,8 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -48,6 +56,22 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
     private val playbackMediaFactory = PlaybackMediaFactory(application)
     val vlcController = VlcPlaybackController(application)
     private var currentRequest: PlaybackRequest? = null
+    private var pendingAudioTrackId: String? = null
+    private var pendingSubtitleTrackId: String? = null
+    private var shouldAutoEnableSubtitleTrack: Boolean = false
+
+    private data class ExoTrackHandle(
+        val mediaTrackGroup: TrackGroup,
+        val trackIndex: Int,
+    )
+
+    private data class ExoTrackState(
+        val tracks: List<MediaTrackInfo>,
+        val handles: Map<String, ExoTrackHandle>,
+    )
+
+    private var exoAudioTrackHandles: Map<String, ExoTrackHandle> = emptyMap()
+    private var exoSubtitleTrackHandles: Map<String, ExoTrackHandle> = emptyMap()
 
     val player: ExoPlayer = ExoPlayer.Builder(
         application,
@@ -72,6 +96,10 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            refreshPlaybackState()
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
             refreshPlaybackState()
         }
 
@@ -119,6 +147,67 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         player.removeListener(playerListener)
         player.release()
         vlcController.release()
+    }
+
+    fun togglePlayback() {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            if (_uiState.value.playbackPhase == PlaybackPhase.PLAYING) {
+                pausePlayback()
+            } else {
+                resumePlayback()
+            }
+            refreshPlaybackState()
+            publishState()
+        }
+    }
+
+    fun seekBy(deltaMs: Long) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val targetPosition = (_uiState.value.currentPositionMs + deltaMs)
+                .coerceAtLeast(0L)
+                .let { candidate ->
+                    val duration = _uiState.value.durationMs
+                    if (duration > 0L) {
+                        candidate.coerceAtMost(duration)
+                    } else {
+                        candidate
+                    }
+                }
+            seekPlayback(targetPosition)
+            refreshPlaybackState()
+            publishState()
+        }
+    }
+
+    fun cycleAudioTrack() {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val audioTracks = _uiState.value.audioTracks
+            if (audioTracks.isEmpty()) {
+                return@launch
+            }
+
+            val currentIndex = audioTracks.indexOfFirst { it.id == _uiState.value.selectedAudioTrackId }
+            val nextTrack = audioTracks[(if (currentIndex >= 0) currentIndex + 1 else 0) % audioTracks.size]
+            selectAudioTrack(nextTrack.id)
+        }
+    }
+
+    fun cycleSubtitleTrack() {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val subtitleTracks = _uiState.value.subtitleTracks
+            if (subtitleTracks.isEmpty()) {
+                return@launch
+            }
+
+            val options = buildList {
+                add(OFF_TRACK_ID)
+                addAll(subtitleTracks.map { it.id })
+            }
+            val currentId = _uiState.value.selectedSubtitleTrackId ?: OFF_TRACK_ID
+            val currentIndex = options.indexOf(currentId).takeIf { it >= 0 } ?: 0
+            val nextTrackId = options[(currentIndex + 1) % options.size]
+            selectSubtitleTrack(nextTrackId)
+        }
     }
 
     private fun startServer() {
@@ -222,6 +311,8 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                     "seek" -> handleSeek(payload)
                     "volume" -> handleVolume(payload)
                     "stop" -> stopPlayback()
+                    "audio_track", "select_audio_track", "set_audio_track" -> handleAudioTrack(payload)
+                    "subtitle_track", "select_subtitle_track", "set_subtitle_track" -> handleSubtitleTrack(payload)
                     "get_state" -> Unit
                     else -> _uiState.update {
                         it.copy(lastError = "Unsupported command received.")
@@ -246,6 +337,9 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         }
 
         currentRequest = request
+        pendingAudioTrackId = request.audioTrackId
+        pendingSubtitleTrackId = request.subtitleTrackId
+        shouldAutoEnableSubtitleTrack = request.subtitle != null && request.subtitleTrackId.isNullOrBlank()
         val backend = request.preferredBackend
         switchBackend(backend)
 
@@ -254,6 +348,11 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 ?: payload["time"]?.jsonPrimitive?.doubleOrNull?.let { (it * 1_000).toLong() }
             vlcController.play(request, positionMs)
         } else {
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .setSelectTextByDefault(request.subtitle != null)
+                .build()
             val mediaSource = playbackMediaFactory.createMediaSource(request)
             player.setMediaSource(mediaSource)
             player.prepare()
@@ -269,7 +368,12 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         _uiState.update {
             it.copy(
                 currentMediaUrl = request.url,
+                currentTitle = request.title?.takeIf(String::isNotBlank) ?: deriveTitleFromUrl(request.url),
                 playbackBackend = backend,
+                audioTracks = emptyList(),
+                subtitleTracks = emptyList(),
+                selectedAudioTrackId = null,
+                selectedSubtitleTrackId = null,
                 lastError = null,
             )
         }
@@ -298,9 +402,50 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         normalized?.let { setPlaybackVolume(it) }
     }
 
+    private fun handleAudioTrack(payload: JsonObject) {
+        val trackId = payload["id"]?.jsonPrimitive?.contentOrNull
+            ?: payload["audioTrackId"]?.jsonPrimitive?.contentOrNull
+        trackId?.let(::selectAudioTrack)
+    }
+
+    private fun handleSubtitleTrack(payload: JsonObject) {
+        val trackId = payload["id"]?.jsonPrimitive?.contentOrNull
+            ?: payload["subtitleTrackId"]?.jsonPrimitive?.contentOrNull
+            ?: payload["subtitle"]?.jsonPrimitive?.contentOrNull
+        selectSubtitleTrack(trackId)
+    }
+
+    private fun selectAudioTrack(trackId: String) {
+        pendingAudioTrackId = null
+        if (!selectAudioTrackInternal(trackId)) {
+            _uiState.update { it.copy(lastError = "Audio track is not available on this stream.") }
+        }
+        refreshPlaybackState()
+        publishState()
+    }
+
+    private fun selectSubtitleTrack(trackId: String?) {
+        pendingSubtitleTrackId = null
+        shouldAutoEnableSubtitleTrack = false
+        if (!selectSubtitleTrackInternal(trackId)) {
+            _uiState.update { it.copy(lastError = "Subtitle track is not available on this stream.") }
+        }
+        refreshPlaybackState()
+        publishState()
+    }
+
     private fun refreshPlaybackState() {
         if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
             val snapshot = vlcController.snapshot()
+            var audioTracks = vlcController.audioTracks()
+            var subtitleTracks = vlcController.subtitleTracks()
+            if (applyPendingTrackSelections(audioTracks, subtitleTracks)) {
+                audioTracks = vlcController.audioTracks()
+                subtitleTracks = vlcController.subtitleTracks()
+            }
+
+            val selectedAudioTrackId = audioTracks.firstOrNull { it.selected }?.id
+            val selectedSubtitleTrackId = subtitleTracks.firstOrNull { it.selected }?.id
             val playbackPhase = when {
                 _uiState.value.lastError != null -> PlaybackPhase.ERROR
                 snapshot.isPlaying -> PlaybackPhase.PLAYING
@@ -320,9 +465,24 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                     },
                     currentMediaUrl = snapshot.currentMediaUrl ?: it.currentMediaUrl,
                     playbackVolume = snapshot.volume,
+                    audioTracks = audioTracks,
+                    subtitleTracks = subtitleTracks,
+                    selectedAudioTrackId = selectedAudioTrackId,
+                    selectedSubtitleTrackId = selectedSubtitleTrackId,
                 )
             }
             return
+        }
+
+        var audioTrackState = collectExoTrackState(C.TRACK_TYPE_AUDIO, "Audio")
+        var subtitleTrackState = collectExoTrackState(C.TRACK_TYPE_TEXT, "Subtitle")
+        exoAudioTrackHandles = audioTrackState.handles
+        exoSubtitleTrackHandles = subtitleTrackState.handles
+        if (applyPendingTrackSelections(audioTrackState.tracks, subtitleTrackState.tracks)) {
+            audioTrackState = collectExoTrackState(C.TRACK_TYPE_AUDIO, "Audio")
+            subtitleTrackState = collectExoTrackState(C.TRACK_TYPE_TEXT, "Subtitle")
+            exoAudioTrackHandles = audioTrackState.handles
+            exoSubtitleTrackHandles = subtitleTrackState.handles
         }
 
         val playbackPhase = when {
@@ -338,6 +498,10 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         val durationMs = player.duration.takeUnless { it == C.TIME_UNSET || it < 0L } ?: 0L
         val currentPositionMs = player.currentPosition.coerceAtLeast(0L)
         val currentUrl = player.currentMediaItem?.localConfiguration?.uri?.toString()
+        val audioTracks = audioTrackState.tracks
+        val subtitleTracks = subtitleTrackState.tracks
+        val selectedAudioTrackId = audioTracks.firstOrNull { it.selected }?.id
+        val selectedSubtitleTrackId = subtitleTracks.firstOrNull { it.selected }?.id
 
         _uiState.update {
             it.copy(
@@ -347,6 +511,10 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 bufferedPercentage = player.bufferedPercentage,
                 currentMediaUrl = currentUrl ?: it.currentMediaUrl,
                 playbackVolume = player.volume.toDouble(),
+                audioTracks = audioTracks,
+                subtitleTracks = subtitleTracks,
+                selectedAudioTrackId = selectedAudioTrackId,
+                selectedSubtitleTrackId = selectedSubtitleTrackId,
             )
         }
     }
@@ -366,6 +534,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 put("connectionUrl", JsonPrimitive(state.connectionUrl ?: ""))
                 put("webSocketUrl", JsonPrimitive(state.webSocketUrl ?: ""))
                 put("clientCount", JsonPrimitive(state.clientCount))
+                put("title", JsonPrimitive(state.currentTitle ?: ""))
                 put("playbackBackend", JsonPrimitive(state.playbackBackend.name.lowercase()))
                 put("playbackPhase", JsonPrimitive(state.playbackPhase.name.lowercase()))
                 put("isPlaying", JsonPrimitive(state.playbackPhase == PlaybackPhase.PLAYING))
@@ -374,12 +543,37 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 put("bufferedPercentage", JsonPrimitive(state.bufferedPercentage))
                 put("volume", JsonPrimitive(state.playbackVolume))
                 put("currentMediaUrl", JsonPrimitive(state.currentMediaUrl ?: ""))
+                put("selectedAudioTrackId", JsonPrimitive(state.selectedAudioTrackId ?: ""))
+                put("selectedSubtitleTrackId", JsonPrimitive(state.selectedSubtitleTrackId ?: ""))
                 put("lastError", JsonPrimitive(state.lastError ?: ""))
+                put("audioTracks", buildJsonArray {
+                    state.audioTracks.forEach { track ->
+                        addJsonObject {
+                            put("id", JsonPrimitive(track.id))
+                            put("label", JsonPrimitive(track.label))
+                            put("language", JsonPrimitive(track.language ?: ""))
+                            put("selected", JsonPrimitive(track.selected))
+                        }
+                    }
+                })
+                put("subtitleTracks", buildJsonArray {
+                    state.subtitleTracks.forEach { track ->
+                        addJsonObject {
+                            put("id", JsonPrimitive(track.id))
+                            put("label", JsonPrimitive(track.label))
+                            put("language", JsonPrimitive(track.language ?: ""))
+                            put("selected", JsonPrimitive(track.selected))
+                        }
+                    }
+                })
                 putJsonObject("protocol") {
                     put("play", JsonPrimitive("play + url"))
                     put("pause", JsonPrimitive("pause"))
                     put("seek", JsonPrimitive("seek + positionMs|time|progress"))
                     put("volume", JsonPrimitive("volume + value"))
+                    put("audioTrack", JsonPrimitive("optional: audioTrackId on play, or set_audio_track with id"))
+                    put("subtitle", JsonPrimitive("optional: subtitleUrl + subtitleMimeType + subtitleLanguage + subtitleLabel"))
+                    put("subtitleTrack", JsonPrimitive("optional: subtitleTrackId on play, or set_subtitle_track with id|__off__"))
                     put("format", JsonPrimitive("optional: auto|hls|dash|smoothstreaming|rtsp|progressive|mp4|mkv|webm"))
                     put("container", JsonPrimitive("optional for progressive: mkv|mp4|webm|mp3|aac|flac|wav|ogg"))
                     put("audioCodec", JsonPrimitive("optional: eac3|ddp|ac3|dts|truehd|aac"))
@@ -427,6 +621,27 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
             player.stop()
             player.clearMediaItems()
         }
+        currentRequest = null
+        pendingAudioTrackId = null
+        pendingSubtitleTrackId = null
+        shouldAutoEnableSubtitleTrack = false
+        exoAudioTrackHandles = emptyMap()
+        exoSubtitleTrackHandles = emptyMap()
+        _uiState.update {
+            it.copy(
+                playbackPhase = PlaybackPhase.IDLE,
+                currentPositionMs = 0L,
+                durationMs = 0L,
+                bufferedPercentage = 0,
+                currentMediaUrl = null,
+                currentTitle = null,
+                audioTracks = emptyList(),
+                subtitleTracks = emptyList(),
+                selectedAudioTrackId = null,
+                selectedSubtitleTrackId = null,
+                lastError = null,
+            )
+        }
     }
 
     private fun seekPlayback(positionMs: Long) {
@@ -465,6 +680,125 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                 message.contains("dolby")
             )
     }
+
+    private fun applyPendingTrackSelections(
+        audioTracks: List<MediaTrackInfo>,
+        subtitleTracks: List<MediaTrackInfo>,
+    ): Boolean {
+        var changed = false
+
+        pendingAudioTrackId?.takeIf { desiredId -> audioTracks.any { it.id == desiredId } }?.let { desiredId ->
+            changed = selectAudioTrackInternal(desiredId) || changed
+            pendingAudioTrackId = null
+        }
+
+        when {
+            pendingSubtitleTrackId?.let { desiredId -> desiredId == OFF_TRACK_ID || subtitleTracks.any { it.id == desiredId } } == true -> {
+                changed = selectSubtitleTrackInternal(pendingSubtitleTrackId) || changed
+                pendingSubtitleTrackId = null
+                shouldAutoEnableSubtitleTrack = false
+            }
+            shouldAutoEnableSubtitleTrack && subtitleTracks.isNotEmpty() && subtitleTracks.none { it.selected } -> {
+                changed = selectSubtitleTrackInternal(subtitleTracks.first().id) || changed
+                shouldAutoEnableSubtitleTrack = false
+            }
+        }
+
+        return changed
+    }
+
+    private fun selectAudioTrackInternal(trackId: String): Boolean {
+        return if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.selectAudioTrack(trackId)
+        } else {
+            val handle = exoAudioTrackHandles[trackId] ?: return false
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                .setOverrideForType(TrackSelectionOverride(handle.mediaTrackGroup, handle.trackIndex))
+                .build()
+            true
+        }
+    }
+
+    private fun selectSubtitleTrackInternal(trackId: String?): Boolean {
+        return if (_uiState.value.playbackBackend == PlaybackBackend.VLC) {
+            vlcController.selectSubtitleTrack(trackId)
+        } else {
+            val builder = player.trackSelectionParameters
+                .buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+
+            if (trackId.isNullOrBlank() || trackId == OFF_TRACK_ID) {
+                player.trackSelectionParameters = builder
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                    .build()
+                true
+            } else {
+                val handle = exoSubtitleTrackHandles[trackId] ?: return false
+                player.trackSelectionParameters = builder
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setOverrideForType(TrackSelectionOverride(handle.mediaTrackGroup, handle.trackIndex))
+                    .build()
+                true
+            }
+        }
+    }
+
+    private fun collectExoTrackState(trackType: Int, fallbackPrefix: String): ExoTrackState {
+        val tracks = mutableListOf<MediaTrackInfo>()
+        val handles = mutableMapOf<String, ExoTrackHandle>()
+
+        player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+            if (group.type != trackType) {
+                return@forEachIndexed
+            }
+
+            for (trackIndex in 0 until group.length) {
+                if (!group.isTrackSupported(trackIndex)) {
+                    continue
+                }
+
+                val format = group.getTrackFormat(trackIndex)
+                val trackId = format.id ?: "${trackType}_${groupIndex}_$trackIndex"
+                tracks += MediaTrackInfo(
+                    id = trackId,
+                    label = buildExoTrackLabel(format, tracks.size, fallbackPrefix),
+                    language = format.language,
+                    selected = group.isTrackSelected(trackIndex),
+                )
+                handles[trackId] = ExoTrackHandle(
+                    mediaTrackGroup = group.mediaTrackGroup,
+                    trackIndex = trackIndex,
+                )
+            }
+        }
+
+        return ExoTrackState(
+            tracks = tracks,
+            handles = handles,
+        )
+    }
+
+    private fun buildExoTrackLabel(format: Format, index: Int, fallbackPrefix: String): String {
+        val parts = listOf(
+            format.label,
+            format.language,
+            format.sampleMimeType,
+            format.codecs,
+        ).filter { !it.isNullOrBlank() }
+
+        return parts.firstOrNull() ?: "$fallbackPrefix ${index + 1}"
+    }
+
+    private fun deriveTitleFromUrl(url: String): String {
+        val candidate = url.substringBefore('?').substringBefore('#').substringAfterLast('/').trim()
+        return if (candidate.isBlank()) {
+            "Now playing"
+        } else {
+            candidate
+        }
+    }
 }
 
 data class ReceiverUiState(
@@ -480,6 +814,11 @@ data class ReceiverUiState(
     val bufferedPercentage: Int = 0,
     val playbackVolume: Double = 1.0,
     val currentMediaUrl: String? = null,
+    val currentTitle: String? = null,
+    val audioTracks: List<MediaTrackInfo> = emptyList(),
+    val subtitleTracks: List<MediaTrackInfo> = emptyList(),
+    val selectedAudioTrackId: String? = null,
+    val selectedSubtitleTrackId: String? = null,
     val lastError: String? = null,
     val qrBitmap: Bitmap? = null,
 )

@@ -98,6 +98,23 @@ h1 {
   display: block;
 }
 
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 16px;
+}
+
+.grid.three {
+  grid-template-columns: 1.6fr 1fr 0.8fr;
+  gap: 14px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+}
+
 .field span,
 .section-head h2 {
   display: block;
@@ -112,6 +129,15 @@ input[type="range"] {
 }
 
 input[type="url"] {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 14, 24, 0.84);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 1rem;
+}
+
+input[type="text"] {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(8, 14, 24, 0.84);
   color: var(--text);
@@ -197,6 +223,13 @@ button.primary {
   overflow-wrap: anywhere;
 }
 
+.current-title {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
 .current-media.helper {
   margin-top: 10px;
   font-size: 0.92rem;
@@ -209,6 +242,11 @@ button.primary {
   }
 
   .panel.split {
+    grid-template-columns: 1fr;
+  }
+
+  .grid.two,
+  .grid.three {
     grid-template-columns: 1fr;
   }
 }

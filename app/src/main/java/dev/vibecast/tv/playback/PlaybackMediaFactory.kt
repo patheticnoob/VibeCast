@@ -1,7 +1,10 @@
 package dev.vibecast.tv.playback
 
+import android.net.Uri
+import androidx.media3.common.C
 import android.content.Context
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
@@ -39,12 +42,25 @@ class PlaybackMediaFactory(private val context: Context) {
             .setConstantBitrateSeekingEnabled(true)
 
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
-        val mediaItem = MediaItem.Builder()
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(request.url)
             .apply {
                 request.mediaMimeType?.let(::setMimeType)
+                request.subtitle?.let { subtitle ->
+                    val subtitleMimeType = request.subtitleMimeType ?: MimeTypes.TEXT_VTT
+                    setSubtitleConfigurations(
+                        listOf(
+                            MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitle.url))
+                                .setMimeType(subtitleMimeType)
+                                .setLanguage(subtitle.language)
+                                .setLabel(subtitle.label)
+                                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                                .build(),
+                        ),
+                    )
+                }
             }
-            .build()
+        val mediaItem = mediaItemBuilder.build()
 
         return mediaSourceFactory.createMediaSource(mediaItem)
     }

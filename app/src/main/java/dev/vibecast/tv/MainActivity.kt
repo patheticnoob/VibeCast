@@ -20,6 +20,11 @@ class MainActivity : ComponentActivity() {
                 uiState = uiState,
                 player = viewModel.player,
                 vlcController = viewModel.vlcController,
+                onTogglePlayback = viewModel::togglePlayback,
+                onSeekBack = { viewModel.seekBy(-10_000L) },
+                onSeekForward = { viewModel.seekBy(10_000L) },
+                onCycleAudioTrack = viewModel::cycleAudioTrack,
+                onCycleSubtitleTrack = viewModel::cycleSubtitleTrack,
             )
         }
     }

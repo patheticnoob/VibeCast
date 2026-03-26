@@ -13,35 +13,82 @@
       <h1>Vibe Cast</h1>
       <p class="subcopy">Send a stream to the TV over your local Wi‑Fi. No cloud. No Google Cast. Just the browser and the receiver.</p>
       <div class="status-strip">
-        <span class="pill" id="socket-state">Connecting…</span>
+        <span class="pill" id="socket-state">Connecting...</span>
         <span class="pill muted" id="playback-phase">Idle</span>
       </div>
     </section>
 
     <section class="panel">
+      <div class="grid two">
+        <label class="field">
+          <span>Title</span>
+          <input id="title-input" type="text" placeholder="Optional display title">
+        </label>
+        <label class="field">
+          <span>Format</span>
+          <select id="format-select">
+            <option value="auto">Auto detect</option>
+            <option value="hls">HLS (.m3u8)</option>
+            <option value="dash">DASH (.mpd)</option>
+            <option value="smoothstreaming">SmoothStreaming (.ism/.isml)</option>
+            <option value="rtsp">RTSP</option>
+            <option value="progressive">Progressive file</option>
+            <option value="mp4">MP4</option>
+            <option value="mkv">MKV</option>
+            <option value="webm">WebM</option>
+          </select>
+        </label>
+      </div>
       <label class="field">
         <span>Video URL</span>
         <input id="media-url" type="url" placeholder="https://example.com/stream.m3u8">
       </label>
-      <label class="field">
-        <span>Format</span>
-        <select id="format-select">
-          <option value="auto">Auto detect</option>
-          <option value="hls">HLS (.m3u8)</option>
-          <option value="dash">DASH (.mpd)</option>
-          <option value="smoothstreaming">SmoothStreaming (.ism/.isml)</option>
-          <option value="rtsp">RTSP</option>
-          <option value="progressive">Progressive file</option>
-          <option value="mp4">MP4</option>
-          <option value="mkv">MKV</option>
-          <option value="webm">WebM</option>
-        </select>
-      </label>
+      <div class="grid three">
+        <label class="field">
+          <span>Subtitle URL</span>
+          <input id="subtitle-url" type="url" placeholder="https://example.com/subtitles.vtt">
+        </label>
+        <label class="field">
+          <span>Subtitle Type</span>
+          <select id="subtitle-type">
+            <option value="">Auto detect</option>
+            <option value="text/vtt">WebVTT (.vtt)</option>
+            <option value="application/x-subrip">SubRip (.srt)</option>
+            <option value="application/ttml+xml">TTML (.ttml/.xml)</option>
+            <option value="text/x-ssa">SSA / ASS</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Subtitle Language</span>
+          <input id="subtitle-language" type="text" placeholder="en">
+        </label>
+      </div>
       <div class="button-row">
         <button id="play-btn" class="primary">Play on TV</button>
         <button id="pause-btn">Pause</button>
         <button id="resume-btn">Resume</button>
         <button id="stop-btn">Stop</button>
+      </div>
+    </section>
+
+    <section class="panel split">
+      <div>
+        <div class="section-head">
+          <h2>Audio Track</h2>
+          <span id="audio-track-readout">Default</span>
+        </div>
+        <select id="audio-track-select">
+          <option value="">Waiting for stream</option>
+        </select>
+      </div>
+      <div>
+        <div class="section-head">
+          <h2>Subtitles</h2>
+          <span id="subtitle-track-readout">Off</span>
+        </div>
+        <select id="subtitle-track-select">
+          <option value="__off__">Off</option>
+        </select>
       </div>
     </section>
 
@@ -83,6 +130,7 @@
       <div class="section-head">
         <h2>Current Media</h2>
       </div>
+      <p id="current-title" class="current-title">Nothing loaded yet.</p>
       <p id="current-media" class="current-media">Nothing loaded yet.</p>
       <p class="current-media helper">If the URL is a proxy or workers endpoint without a visible file extension, choose the format manually before casting.</p>
     </section>
