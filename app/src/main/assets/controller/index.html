@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vibe Cast Remote</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <p class="eyebrow">LOCAL REMOTE</p>
+      <h1>Vibe Cast</h1>
+      <p class="subcopy">Send a stream to the TV over your local Wi‑Fi. No cloud. No Google Cast. Just the browser and the receiver.</p>
+      <div class="status-strip">
+        <span class="pill" id="socket-state">Connecting…</span>
+        <span class="pill muted" id="playback-phase">Idle</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <label class="field">
+        <span>Video URL</span>
+        <input id="media-url" type="url" placeholder="https://example.com/stream.m3u8">
+      </label>
+      <div class="button-row">
+        <button id="play-btn" class="primary">Play on TV</button>
+        <button id="pause-btn">Pause</button>
+        <button id="resume-btn">Resume</button>
+        <button id="stop-btn">Stop</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Seek</h2>
+        <span id="time-readout">00:00 / 00:00</span>
+      </div>
+      <input id="seek-slider" type="range" min="0" max="1000" value="0" disabled>
+      <div class="button-row compact">
+        <button data-seek="-10">-10s</button>
+        <button data-seek="-30">-30s</button>
+        <button data-seek="30">+30s</button>
+        <button data-seek="10">+10s</button>
+      </div>
+    </section>
+
+    <section class="panel split">
+      <div>
+        <div class="section-head">
+          <h2>Volume</h2>
+          <span id="volume-readout">100%</span>
+        </div>
+        <input id="volume-slider" type="range" min="0" max="100" value="100">
+      </div>
+      <div>
+        <div class="section-head">
+          <h2>Receiver</h2>
+        </div>
+        <dl class="facts">
+          <div><dt>HTTP</dt><dd id="http-url">-</dd></div>
+          <div><dt>WS</dt><dd id="ws-url">-</dd></div>
+          <div><dt>Clients</dt><dd id="client-count">0</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>Current Media</h2>
+      </div>
+      <p id="current-media" class="current-media">Nothing loaded yet.</p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
