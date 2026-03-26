@@ -40,8 +40,9 @@ data class PlaybackRequest(
                     container == "mkv" ||
                     container == "matroska"
 
-            val needsCodecHeavyFallback =
-                isMkvLike ||
+            val shouldPreferVlc =
+                format == "progressive" ||
+                    isMkvLike ||
                     audioCodec.contains("eac3") ||
                     audioCodec.contains("ec-3") ||
                     audioCodec.contains("ddp") ||
@@ -52,7 +53,7 @@ data class PlaybackRequest(
                     videoCodec.contains("h265") ||
                     videoCodec.contains("h.265")
 
-            return if ((format == "progressive" || isMkvLike) && needsCodecHeavyFallback) {
+            return if (shouldPreferVlc) {
                 PlaybackBackend.VLC
             } else {
                 PlaybackBackend.EXOPLAYER

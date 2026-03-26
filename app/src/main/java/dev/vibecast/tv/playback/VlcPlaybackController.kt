@@ -48,10 +48,12 @@ class VlcPlaybackController(context: Context) {
     fun play(request: PlaybackRequest, positionMs: Long? = null) {
         currentRequest = request
         val media = Media(libVlc, Uri.parse(request.url)).apply {
-            setHWDecoderEnabled(true, false)
+            // Favor VLC's software path for codec-heavy progressive files.
+            setHWDecoderEnabled(false, false)
             setDefaultMediaPlayerOptions()
             request.userAgent?.takeIf { it.isNotBlank() }?.let { addOption(":http-user-agent=$it") }
             request.referer?.takeIf { it.isNotBlank() }?.let { addOption(":http-referrer=$it") }
+            addOption(":codec=all")
         }
 
         mediaPlayer.setMedia(media)
