@@ -79,6 +79,19 @@ Example:
 
 The site should not try to generically scan the local network from JavaScript. Use QR pairing or a previously remembered receiver instead.
 
+Safer website integration from an HTTPS site:
+
+```js
+const client = new window.VibeCastWeb.VibeCastClient({
+  host: "192.168.1.23",
+  port: 8080,
+});
+
+client.launchController("https://example.com/stream.m3u8");
+```
+
+That opens the TV app's local controller page and auto-starts playback using the `?play=` query parameter.
+
 ## Notes
 
 - The project is configured for `compileSdk 36` and `targetSdk 36`.

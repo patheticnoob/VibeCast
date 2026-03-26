@@ -21,6 +21,8 @@ let latestState = {
   volume: 1,
 };
 let isDraggingSeek = false;
+const params = new URLSearchParams(location.search);
+const pendingAutoPlayUrl = params.get('play') || params.get('url') || '';
 
 function connect() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -31,6 +33,10 @@ function connect() {
     socketState.textContent = 'Connected';
     socketState.classList.remove('muted');
     send({ action: 'get_state' });
+    if (pendingAutoPlayUrl) {
+      mediaUrl.value = pendingAutoPlayUrl;
+      send({ action: 'play', url: pendingAutoPlayUrl });
+    }
   });
 
   socket.addEventListener('message', (event) => {
@@ -153,5 +159,9 @@ volumeSlider.addEventListener('change', () => {
 });
 
 mediaUrl.value = localStorage.getItem('vibe_cast_last_media_url') || '';
+if (pendingAutoPlayUrl) {
+  mediaUrl.value = pendingAutoPlayUrl;
+  localStorage.setItem('vibe_cast_last_media_url', pendingAutoPlayUrl);
+}
 
 connect();

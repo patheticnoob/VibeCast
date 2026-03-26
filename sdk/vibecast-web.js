@@ -52,6 +52,20 @@
       return `ws://${this.host}:${this.port}/ws`;
     }
 
+    getLaunchUrl(mediaUrl = "") {
+      const base = this.getHttpBaseUrl();
+      if (!mediaUrl) {
+        return `${base}/`;
+      }
+      return `${base}/?play=${encodeURIComponent(mediaUrl)}`;
+    }
+
+    launchController(mediaUrl = "", target = "_blank") {
+      const url = this.getLaunchUrl(mediaUrl);
+      window.open(url, target, "noopener,noreferrer");
+      return url;
+    }
+
     async fetchState() {
       this._assertReceiver();
       const response = await fetch(`${this.getHttpBaseUrl()}/state`, {
