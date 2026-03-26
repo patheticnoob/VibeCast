@@ -26,7 +26,8 @@ const currentMedia = document.getElementById('current-media');
 
 const OFF_TRACK_ID = '__off__';
 const params = new URLSearchParams(location.search);
-const pendingAutoPlayUrl = params.get('play') || params.get('url') || '';
+let pendingAutoPlayUrl = params.get('play') || params.get('url') || '';
+let autoPlayDispatched = false;
 
 let socket;
 let isDraggingSeek = false;
@@ -48,9 +49,12 @@ function connect() {
     socketState.textContent = 'Connected';
     socketState.classList.remove('muted');
     send({ action: 'get_state' });
-    if (pendingAutoPlayUrl) {
+    if (pendingAutoPlayUrl && !autoPlayDispatched) {
+      autoPlayDispatched = true;
       mediaUrl.value = pendingAutoPlayUrl;
       sendPlay();
+      clearAutoPlayQuery();
+      pendingAutoPlayUrl = '';
     }
   });
 
@@ -127,6 +131,14 @@ function sendPlay() {
   localStorage.setItem('vibe_cast_last_subtitle_language', subtitleLang);
 
   send(payload);
+}
+
+function clearAutoPlayQuery() {
+  params.delete('play');
+  params.delete('url');
+  const query = params.toString();
+  const nextUrl = query ? `${location.pathname}?${query}` : location.pathname;
+  history.replaceState({}, '', nextUrl);
 }
 
 function applyState(state) {
