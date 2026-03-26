@@ -42,6 +42,7 @@ $env:JAVA_HOME='C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot'
 Debug APK:
 
 - `app/build/outputs/apk/debug/app-debug.apk`
+- `release/vibe-cast-debug.apk` for direct download from GitHub
 
 ## Website integration
 
