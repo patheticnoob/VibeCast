@@ -8,10 +8,14 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import dev.vibecast.tv.cast.CastServer
 import dev.vibecast.tv.cast.NetworkAddressResolver
 import dev.vibecast.tv.cast.QrCodeBitmapFactory
+import dev.vibecast.tv.playback.PlaybackMediaFactory
+import dev.vibecast.tv.playback.PlaybackRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,13 +37,19 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
+@UnstableApi
 class VibeCastViewModel(application: Application) : AndroidViewModel(application) {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
     }
 
-    val player: ExoPlayer = ExoPlayer.Builder(application).build().apply {
+    private val playbackMediaFactory = PlaybackMediaFactory(application)
+
+    val player: ExoPlayer = ExoPlayer.Builder(
+        application,
+        DefaultRenderersFactory(application).forceEnableMediaCodecAsynchronousQueueing(),
+    ).build().apply {
         playWhenReady = true
         repeatMode = Player.REPEAT_MODE_OFF
     }
@@ -67,7 +77,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         override fun onPlayerError(error: PlaybackException) {
             _uiState.update {
                 it.copy(
-                    lastError = error.localizedMessage ?: error.message ?: "Playback error",
+                    lastError = buildPlaybackErrorMessage(error),
                     playbackPhase = PlaybackPhase.ERROR,
                 )
             }
@@ -212,13 +222,14 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun handlePlay(payload: JsonObject) {
-        val url = payload["url"]?.jsonPrimitive?.contentOrNull
-        if (url.isNullOrBlank()) {
+        val request = PlaybackRequest.fromJson(payload)
+        if (request == null) {
             _uiState.update { it.copy(lastError = "Missing media URL in play command.") }
             return
         }
 
-        player.setMediaItem(MediaItem.fromUri(url))
+        val mediaSource = playbackMediaFactory.createMediaSource(request)
+        player.setMediaSource(mediaSource)
         player.prepare()
 
         payload["positionMs"]?.jsonPrimitive?.longOrNull?.let(player::seekTo)
@@ -229,7 +240,7 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
         player.play()
         _uiState.update {
             it.copy(
-                currentMediaUrl = url,
+                currentMediaUrl = request.url,
                 lastError = null,
             )
         }
@@ -312,9 +323,24 @@ class VibeCastViewModel(application: Application) : AndroidViewModel(application
                     put("pause", JsonPrimitive("pause"))
                     put("seek", JsonPrimitive("seek + positionMs|time|progress"))
                     put("volume", JsonPrimitive("volume + value"))
+                    put("format", JsonPrimitive("optional: auto|hls|dash|smoothstreaming|rtsp|progressive|mp4|mkv|webm"))
+                    put("headers", JsonPrimitive("optional: request headers object"))
                 }
             },
         )
+    }
+
+    private fun buildPlaybackErrorMessage(error: PlaybackException): String {
+        val name = error.errorCodeName
+        val detail = error.localizedMessage ?: error.message
+
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED ->
+                "This TV does not support this codec in hardware/software decode. $name${detail?.let { ": $it" } ?: ""}"
+            else -> "$name${detail?.let { ": $it" } ?: ""}"
+        }
     }
 }
 

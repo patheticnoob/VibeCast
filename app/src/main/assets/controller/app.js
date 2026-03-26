@@ -1,6 +1,7 @@
 const socketState = document.getElementById('socket-state');
 const playbackPhase = document.getElementById('playback-phase');
 const mediaUrl = document.getElementById('media-url');
+const formatSelect = document.getElementById('format-select');
 const playBtn = document.getElementById('play-btn');
 const pauseBtn = document.getElementById('pause-btn');
 const resumeBtn = document.getElementById('resume-btn');
@@ -121,7 +122,12 @@ playBtn.addEventListener('click', () => {
     return;
   }
   localStorage.setItem('vibe_cast_last_media_url', url);
-  send({ action: 'play', url });
+  const format = formatSelect.value;
+  send({
+    action: 'play',
+    url,
+    ...(format && format !== 'auto' ? { format } : {}),
+  });
 });
 
 pauseBtn.addEventListener('click', () => send({ action: 'pause' }));

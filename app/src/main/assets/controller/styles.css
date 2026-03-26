@@ -120,6 +120,17 @@ input[type="url"] {
   font-size: 1rem;
 }
 
+select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 14, 24, 0.84);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 1rem;
+  appearance: none;
+}
+
 button {
   border: 0;
   border-radius: 14px;
@@ -184,6 +195,11 @@ button.primary {
   margin: 0;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.current-media.helper {
+  margin-top: 10px;
+  font-size: 0.92rem;
 }
 
 @media (max-width: 720px) {

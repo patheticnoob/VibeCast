@@ -23,6 +23,20 @@
         <span>Video URL</span>
         <input id="media-url" type="url" placeholder="https://example.com/stream.m3u8">
       </label>
+      <label class="field">
+        <span>Format</span>
+        <select id="format-select">
+          <option value="auto">Auto detect</option>
+          <option value="hls">HLS (.m3u8)</option>
+          <option value="dash">DASH (.mpd)</option>
+          <option value="smoothstreaming">SmoothStreaming (.ism/.isml)</option>
+          <option value="rtsp">RTSP</option>
+          <option value="progressive">Progressive file</option>
+          <option value="mp4">MP4</option>
+          <option value="mkv">MKV</option>
+          <option value="webm">WebM</option>
+        </select>
+      </label>
       <div class="button-row">
         <button id="play-btn" class="primary">Play on TV</button>
         <button id="pause-btn">Pause</button>
@@ -70,6 +84,7 @@
         <h2>Current Media</h2>
       </div>
       <p id="current-media" class="current-media">Nothing loaded yet.</p>
+      <p class="current-media helper">If the URL is a proxy or workers endpoint without a visible file extension, choose the format manually before casting.</p>
     </section>
   </main>
 
